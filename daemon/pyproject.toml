@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 cam-daemon = "cam_daemon.__main__:main"
+camctl = "camctl.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["cam_daemon*"]
+include = ["cam_daemon*", "camctl*"]

@@ -15,6 +15,7 @@ import sys
 import structlog
 
 from cam_daemon.audio_io import SpeakerSink
+from cam_daemon.control_socket import ControlSocket
 from cam_daemon.executor import dispatch
 from cam_daemon.wake import Activator
 from cam_daemon.ws_client import CloudClient, CloudConfig
@@ -54,19 +55,30 @@ async def main_loop() -> None:
     speaker.start()
 
     events = await activator.listen()
-    log.info("daemon.idle", waiting_for="wake_word|clap")
 
-    while True:
-        activation = await events.get()
-        log.info("wake.fired", kind=activation.kind, conf=activation.confidence)
-        cloud = CloudClient(cfg)
-        try:
-            await active_session(cloud, speaker)
-        except Exception as exc:
-            log.exception("session.failed", error=str(exc))
-        finally:
-            await cloud.close()
-            log.info("daemon.idle", waiting_for="wake_word|clap")
+    state = {"phase": "idle", "sessions": 0}
+    control = ControlSocket(events, status_fn=lambda: dict(state))
+    await control.start()
+
+    log.info("daemon.idle", waiting_for="wake_word|clap|control_socket")
+
+    try:
+        while True:
+            activation = await events.get()
+            state["phase"] = "active"
+            state["sessions"] += 1
+            log.info("wake.fired", kind=activation.kind, conf=activation.confidence)
+            cloud = CloudClient(cfg)
+            try:
+                await active_session(cloud, speaker)
+            except Exception as exc:
+                log.exception("session.failed", error=str(exc))
+            finally:
+                await cloud.close()
+                state["phase"] = "idle"
+                log.info("daemon.idle", waiting_for="wake_word|clap|control_socket")
+    finally:
+        await control.stop()
 
 
 def main() -> None:

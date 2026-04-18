@@ -35,5 +35,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install ruff==0.7.2
-      - run: ruff check daemon/cam_daemon
-      - run: python -m compileall -q daemon/cam_daemon
+      - run: ruff check daemon/cam_daemon daemon/camctl
+      - run: python -m compileall -q daemon/cam_daemon daemon/camctl
