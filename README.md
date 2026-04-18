@@ -37,16 +37,29 @@ home/sway/config       # Per-user Sway overlay (optional)
 
 ### Path A — Custom LatheOS installer ISO (recommended)
 
-Build a single USB that drops you into a LatheOS installer already wired for
-the flake.
+You have two ways to get an ISO:
+
+**A1. Download from CI (no Nix required).**
+Every push to `main` builds the ISO on a Linux runner and uploads it as a
+workflow artifact. Grab the latest green run from
+[Actions → nix](https://github.com/haminxx/LatheOS/actions/workflows/nix.yml),
+expand the `iso / build + upload` job, and download the
+`latheos-installer-<sha>` artifact. Tagged releases (`v*`) additionally publish
+the ISO as a permanent GitHub Release asset.
+
+**A2. Build locally.**
 
 ```bash
 # On any Linux box with Nix ≥ 2.18 (or WSL, or macOS + nix-darwin):
 ./scripts/build-latheos-iso.sh
 # -> result-latheos-iso/iso/latheos-*.iso
+```
 
+Either way, flash the resulting ISO and boot:
+
+```bash
 # Flash to a USB (Linux):
-./scripts/flash-usb.sh result-latheos-iso/iso/latheos-*.iso /dev/sdX
+./scripts/flash-usb.sh path/to/latheos-*.iso /dev/sdX
 
 # Boot the target machine from USB, then inside the live session:
 sudo /etc/latheos/install.sh

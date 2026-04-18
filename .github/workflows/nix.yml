@@ -1,33 +1,30 @@
+################################################################################
+# LatheOS CI — three concerns, three jobs.
+#
+#   daemon-lint   Python side of the house (ruff + compile).
+#   flake-check   Evaluate every nixosConfiguration *independently* so a red
+#                 run points at the exact system that broke. Cheap; no builds.
+#   build-iso     On pushes to main, actually build the installer ISO and
+#                 publish it as a downloadable workflow artifact. This is the
+#                 proof that "plug-and-play OS" isn't just a slogan.
+################################################################################
+
 name: nix
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  flake-check:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: cachix/install-nix-action@v30
-        with:
-          nix_path: nixpkgs=channel:nixos-24.11
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: flake check
-        run: nix flake check --no-build --show-trace
-
-      - name: Evaluate x86_64 config
-        run: |
-          nix eval \
-            .#nixosConfigurations.latheos-x86_64.config.system.build.toplevel.drvPath \
-            --no-write-lock-file
-
   daemon-lint:
+    name: daemon / ruff + compileall
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -37,3 +34,124 @@ jobs:
       - run: python -m pip install ruff==0.7.2
       - run: ruff check daemon/cam_daemon daemon/camctl
       - run: python -m compileall -q daemon/cam_daemon daemon/camctl
+
+  flake-check:
+    name: flake / per-config eval
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # flake eval reads git-tracked files; full history avoids corner cases
+          # where a shallow checkout hides the real ref.
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-24.11
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: flake metadata
+        run: nix flake metadata --no-write-lock-file || true
+
+      # Each eval is isolated so CI logs pinpoint the failing config.
+      - name: eval latheos-x86_64
+        run: |
+          nix eval --no-write-lock-file --show-trace \
+            .#nixosConfigurations.latheos-x86_64.config.system.build.toplevel.drvPath
+
+      - name: eval latheos-aarch64
+        run: |
+          nix eval --no-write-lock-file --show-trace \
+            .#nixosConfigurations.latheos-aarch64.config.system.build.toplevel.drvPath
+
+      - name: eval latheos-iso (x86_64)
+        run: |
+          nix eval --no-write-lock-file --show-trace \
+            .#nixosConfigurations.latheos-iso.config.system.build.isoImage.drvPath
+
+      - name: eval latheos-iso-aarch64
+        run: |
+          nix eval --no-write-lock-file --show-trace \
+            .#nixosConfigurations.latheos-iso-aarch64.config.system.build.isoImage.drvPath
+
+      - name: flake check (no build)
+        run: nix flake check --no-build --show-trace --no-write-lock-file
+
+  build-iso:
+    name: iso / build + upload
+    needs: flake-check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-24.11
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # Pull layers through a warm cache; dramatic speedup on repeat builds.
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      # Free ~20 GB on GitHub-hosted runners before we kick off a 600 MB
+      # squashfs compression job; the stock image ships heavy SDKs we
+      # never touch.
+      - name: reclaim disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache \
+                      /usr/local/share/boost \
+                      /usr/local/lib/android \
+                      /usr/share/dotnet \
+                      /usr/share/swift || true
+          df -h
+
+      - name: build latheos-iso
+        run: nix build .#latheos-iso --print-out-paths --show-trace
+
+      - name: locate artefact
+        id: iso
+        run: |
+          ISO=$(ls result/iso/*.iso | head -n1)
+          SIZE=$(du -h "$ISO" | cut -f1)
+          SHA=$(sha256sum "$ISO" | cut -d' ' -f1)
+          echo "path=$ISO"      >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE"     >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA"    >> "$GITHUB_OUTPUT"
+          echo "### LatheOS ISO"                       >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                      >> "$GITHUB_STEP_SUMMARY"
+          echo "| field   | value |"                   >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|-------|"                   >> "$GITHUB_STEP_SUMMARY"
+          echo "| path    | \`$ISO\` |"                >> "$GITHUB_STEP_SUMMARY"
+          echo "| size    | $SIZE |"                   >> "$GITHUB_STEP_SUMMARY"
+          echo "| sha256  | \`$SHA\` |"                >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: latheos-installer-${{ github.sha }}
+          path: ${{ steps.iso.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      # Tag pushes (v*) are cut as real GitHub Releases so end users get a
+      # stable download URL, not a workflow artifact behind auth.
+      - name: attach ISO to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.iso.outputs.path }}
+          generate_release_notes: true
+          body: |
+            LatheOS installer ISO
+
+            - sha256: `${{ steps.iso.outputs.sha256 }}`
+            - size: ${{ steps.iso.outputs.size }}
+
+            Flash with `dd` or the helper script in `scripts/flash-usb.sh`.
