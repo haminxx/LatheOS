@@ -20,6 +20,7 @@ operator user in the `cam` group to grant access.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from collections.abc import Callable
@@ -85,7 +86,7 @@ class ControlSocket:
             await self._reply(writer, reply)
         finally:
             writer.close()
-            with _suppress():
+            with contextlib.suppress(Exception):
                 await writer.wait_closed()
 
     async def _dispatch(self, msg: dict) -> dict:
@@ -111,11 +112,3 @@ class ControlSocket:
     async def _reply(writer: asyncio.StreamWriter, payload: dict) -> None:
         writer.write((json.dumps(payload) + "\n").encode())
         await writer.drain()
-
-
-class _suppress:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, exc_type, exc, tb) -> bool:
-        return True

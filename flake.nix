@@ -1,16 +1,17 @@
 ################################################################################
-# LatheOS flake — dual-arch reproducible system image.
+# LatheOS flake — dual-arch reproducible system + bootable installer ISO.
 #
-# Build:
-#   nixos-rebuild switch --flake .#latheos-x86_64
-#   nixos-rebuild switch --flake .#latheos-aarch64
+# Installed system (from inside a running NixOS host):
+#   sudo nixos-rebuild switch --flake .#latheos-x86_64
+#   sudo nixos-rebuild switch --flake .#latheos-aarch64
 #
-# Both targets share `configuration.nix` verbatim; only the nixpkgs system
-# string differs. This is what guarantees "Mac ARM and PC x86" portability.
+# Installer ISO (runs anywhere Nix is installed):
+#   nix build .#latheos-iso              # x86_64 host
+#   nix build .#latheos-iso-aarch64      # aarch64 host (or x86_64 with binfmt)
+#   ls -lh result/iso/
 #
-# Home-Manager is an optional input. If pinned, `modules/home.nix` is imported
-# automatically via `specialArgs.inputs`. To build the OS without HM just
-# remove the home-manager line from inputs and the nixosConfiguration below.
+# Both the installed system and the installer ISO derive from the same pinned
+# `nixos-24.11` nixpkgs input — the ISO *is* NixOS, with LatheOS layered on.
 ################################################################################
 
 {
@@ -27,7 +28,7 @@
 
   outputs = inputs@{ self, nixpkgs, home-manager, ... }:
     let
-      mkSystem = system:
+      mkInstalledSystem = system:
         nixpkgs.lib.nixosSystem {
           inherit system;
           specialArgs = { inherit inputs; };
@@ -37,10 +38,31 @@
             ./modules/home.nix
           ];
         };
+
+      # The installer ISO is its own nixosConfiguration because the upstream
+      # installer CD module owns bootloader + fileSystems, which collides
+      # with our storage.nix. Keeping it separate is the canonical pattern.
+      mkInstallerIso = system:
+        nixpkgs.lib.nixosSystem {
+          inherit system;
+          specialArgs = { inherit inputs; };
+          modules = [ ./modules/iso.nix ];
+        };
     in {
       nixosConfigurations = {
-        "latheos-x86_64"  = mkSystem "x86_64-linux";
-        "latheos-aarch64" = mkSystem "aarch64-linux";
+        "latheos-x86_64"        = mkInstalledSystem "x86_64-linux";
+        "latheos-aarch64"       = mkInstalledSystem "aarch64-linux";
+        "latheos-iso"           = mkInstallerIso   "x86_64-linux";
+        "latheos-iso-aarch64"   = mkInstallerIso   "aarch64-linux";
+      };
+
+      # `nix build .#latheos-iso` — direct alias for the ISO artefact.
+      # Only x86_64-linux is exposed as a package (cross-building the ISO
+      # without QEMU binfmt silently fails on most laptops); aarch64 users
+      # call the long `nixosConfigurations.latheos-iso-aarch64.*` path.
+      packages.x86_64-linux = {
+        latheos-iso = self.nixosConfigurations.latheos-iso.config.system.build.isoImage;
+        default     = self.nixosConfigurations.latheos-iso.config.system.build.isoImage;
       };
     };
 }
