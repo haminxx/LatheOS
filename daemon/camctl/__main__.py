@@ -22,9 +22,7 @@ from typing import Any
 DEFAULT_SOCK = "/run/cam-daemon/control.sock"
 
 
-def _send(
-    sock_path: str, payload: dict[str, Any], timeout: float = 2.0
-) -> dict[str, Any]:
+def _send(sock_path: str, payload: dict[str, Any], timeout: float = 2.0) -> dict[str, Any]:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(timeout)
         s.connect(sock_path)
@@ -71,9 +69,7 @@ def cmd_ping(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="camctl", description="Poke the local cam-daemon.")
-    p.add_argument(
-        "--sock", default=None, help=f"Unix socket path (default: {DEFAULT_SOCK})"
-    )
+    p.add_argument("--sock", default=None, help=f"Unix socket path (default: {DEFAULT_SOCK})")
     sub = p.add_subparsers(dest="command", required=True)
 
     a = sub.add_parser("activate", help="Inject a synthetic activation event.")

@@ -14,11 +14,15 @@ a wake actually fires.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from cam_daemon.audio_io import MicStream
 
 try:
     import pvporcupine  # type: ignore
@@ -30,7 +34,9 @@ try:
 except ImportError:  # pragma: no cover
     aubio = None  # type: ignore
 
-from cam_daemon.audio_io import MicStream
+# MicStream is imported lazily inside `listen()` so this module (and thus
+# `Activation`) stays usable on dev hosts without PortAudio / sounddevice —
+# e.g. unit tests for the control socket.
 
 ActivationKind = Literal["wake_word", "clap"]
 
@@ -102,6 +108,8 @@ class Activator:
           - activations: populated only when Porcupine / onset fire.
           - audio: raw PCM s16le bytes, every frame. Bounded; oldest drop.
         """
+        from cam_daemon.audio_io import MicStream  # lazy — see note at top of module
+
         activations: asyncio.Queue[Activation] = asyncio.Queue()
         audio: asyncio.Queue[bytes] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
         mic = MicStream(sample_rate=self.sample_rate, frame_length=self.frame_length)
@@ -119,10 +127,8 @@ class Activator:
 
             def _enqueue() -> None:
                 if audio.full():
-                    try:
+                    with contextlib.suppress(asyncio.QueueEmpty):
                         audio.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
                 audio.put_nowait(pcm)
 
             loop.call_soon_threadsafe(_enqueue)
