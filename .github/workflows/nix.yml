@@ -55,29 +55,35 @@ jobs:
       - name: flake metadata
         run: nix flake metadata --no-write-lock-file || true
 
-      # Each eval is isolated so CI logs pinpoint the failing config.
+      # Each eval is isolated so CI logs pinpoint the failing config. Errors
+      # are echoed *and* spilled into the run's public Summary page so failures
+      # are diagnosable without needing push-level log access.
       - name: eval latheos-x86_64
-        run: |
-          nix eval --no-write-lock-file --show-trace \
-            .#nixosConfigurations.latheos-x86_64.config.system.build.toplevel.drvPath
+        run: ./scripts/ci-eval.sh latheos-x86_64      config.system.build.toplevel.drvPath
 
       - name: eval latheos-aarch64
-        run: |
-          nix eval --no-write-lock-file --show-trace \
-            .#nixosConfigurations.latheos-aarch64.config.system.build.toplevel.drvPath
+        run: ./scripts/ci-eval.sh latheos-aarch64     config.system.build.toplevel.drvPath
 
       - name: eval latheos-iso (x86_64)
-        run: |
-          nix eval --no-write-lock-file --show-trace \
-            .#nixosConfigurations.latheos-iso.config.system.build.isoImage.drvPath
+        run: ./scripts/ci-eval.sh latheos-iso         config.system.build.isoImage.drvPath
 
       - name: eval latheos-iso-aarch64
-        run: |
-          nix eval --no-write-lock-file --show-trace \
-            .#nixosConfigurations.latheos-iso-aarch64.config.system.build.isoImage.drvPath
+        run: ./scripts/ci-eval.sh latheos-iso-aarch64 config.system.build.isoImage.drvPath
 
       - name: flake check (no build)
-        run: nix flake check --no-build --show-trace --no-write-lock-file
+        run: nix flake check --no-build --show-trace --no-write-lock-file 2>&1 | tee /tmp/flake-check.log
+        shell: bash
+      - name: summarise flake-check failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### flake check FAILED"
+            echo ""
+            echo "\`\`\`"
+            tail -n 200 /tmp/flake-check.log || echo "(no log)"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build-iso:
     name: iso / build + upload

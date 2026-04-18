@@ -11,7 +11,10 @@
 {
   security.rtkit.enable = true;
 
-  services.pulseaudio.enable = false;
+  # NixOS 24.11 still exposes the legacy `hardware.pulseaudio.*` tree;
+  # the rename to `services.pulseaudio.*` is a 25.05+ change. Stay on the
+  # pinned release's option set so CI eval stays green.
+  hardware.pulseaudio.enable = false;
 
   services.pipewire = {
     enable = true;
