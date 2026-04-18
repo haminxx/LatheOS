@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cam-daemon"
+version = "0.1.0"
+description = "Local LatheOS wake-word + WebSocket bridge to CAM Cloud Proxy"
+readme = "../README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "websockets>=13.1",
+    "pvporcupine>=3.0.2",
+    "sounddevice>=0.5.1",
+    "numpy>=1.26",
+    "aubio>=0.4.9",
+    "orjson>=3.10",
+    "structlog>=24.4",
+]
+
+[project.scripts]
+cam-daemon = "cam_daemon.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["cam_daemon*"]

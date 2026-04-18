@@ -1,0 +1,28 @@
+# Nix
+result
+result-*
+.direnv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+
+# Secrets — NEVER commit
+persist/
+*.token
+*.ppn
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

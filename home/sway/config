@@ -1,0 +1,7 @@
+# Per-user Sway overrides. The system config at /etc/sway/config already
+# establishes the monochrome palette, bindings, and bar. Anything placed in
+# this file *extends* the system defaults (Sway honours ~/.config/sway/config
+# if present; symlink this file there via `home-manager` or a login script).
+
+# Example: open the CAM transcript overlay on workspace 2 automatically.
+# for_window [app_id="cam-overlay"] move container to workspace number 2
