@@ -49,13 +49,12 @@ class ControlSocket:
 
     async def start(self) -> None:
         sock_path = Path(self.path)
-        sock_path.parent.mkdir(parents=True, exist_ok=True)
-        if sock_path.exists():
-            sock_path.unlink()
+        # Blocking filesystem touches are cheap and single-shot at daemon
+        # startup — offload to a thread anyway so we never stall the loop.
+        await asyncio.to_thread(sock_path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(sock_path.unlink, missing_ok=True)
 
-        self._server = await asyncio.start_unix_server(
-            self._handle, path=str(sock_path)
-        )
+        self._server = await asyncio.start_unix_server(self._handle, path=str(sock_path))
         os.chmod(sock_path, 0o660)
         log.info("control.listening", path=str(sock_path))
 
@@ -64,14 +63,9 @@ class ControlSocket:
             return
         self._server.close()
         await self._server.wait_closed()
-        try:
-            Path(self.path).unlink()
-        except FileNotFoundError:
-            pass
+        await asyncio.to_thread(Path(self.path).unlink, missing_ok=True)
 
-    async def _handle(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             raw = await reader.readline()
             if not raw:

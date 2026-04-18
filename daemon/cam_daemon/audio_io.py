@@ -7,6 +7,7 @@ routed through PipeWire's Pulse shim. We keep the callback path
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 from collections.abc import Callable
@@ -64,10 +65,9 @@ class SpeakerSink:
         self._thread.start()
 
     def write(self, pcm: bytes) -> None:
-        try:
+        # Drop rather than block the WS ingress if the speaker can't keep up.
+        with contextlib.suppress(queue.Full):
             self._q.put_nowait(pcm)
-        except queue.Full:
-            pass  # drop rather than block the WS ingress
 
     def stop(self) -> None:
         self._q.put(None)
