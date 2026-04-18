@@ -3,6 +3,12 @@
 Both detectors consume the same 16 kHz mono int16 stream, so we fan out
 once from the microphone and run them cheaply in parallel. The first to
 fire wins, emitting an activation event on the returned asyncio.Queue.
+
+The same mic pump also publishes the raw PCM frames on a *separate* queue
+so that, once a session is live, `__main__` can forward them straight to
+the cloud without opening a second audio stream. During idle the PCM
+queue simply drops oldest frames — bounded memory, zero warm-up cost when
+a wake actually fires.
 """
 
 from __future__ import annotations
@@ -35,6 +41,12 @@ class Activation:
     confidence: float
 
 
+# Small so we never buffer more than ~200ms of audio when idle. A session
+# consumer drains this in real time; an absent consumer lets the oldest
+# frames roll off via put_nowait → QueueFull handling.
+_AUDIO_QUEUE_MAX = 16
+
+
 class Activator:
     def __init__(
         self,
@@ -45,6 +57,7 @@ class Activator:
         self.sample_rate = sample_rate
         self._porcupine = self._build_porcupine(access_key, keyword_path)
         self._onset = self._build_onset(sample_rate) if aubio else None
+        self._mic: MicStream | None = None
 
     @staticmethod
     def _build_porcupine(access_key: str | None, keyword_path: str | None):
@@ -82,16 +95,42 @@ class Activator:
                     return Activation("clap", peak)
         return None
 
-    async def listen(self) -> asyncio.Queue[Activation]:
-        """Start the mic stream and return a queue of activation events."""
-        queue: asyncio.Queue[Activation] = asyncio.Queue()
+    async def listen(self) -> tuple[asyncio.Queue[Activation], asyncio.Queue[bytes]]:
+        """Start the mic stream.
+
+        Returns two queues fed off the *same* audio callback:
+          - activations: populated only when Porcupine / onset fire.
+          - audio: raw PCM s16le bytes, every frame. Bounded; oldest drop.
+        """
+        activations: asyncio.Queue[Activation] = asyncio.Queue()
+        audio: asyncio.Queue[bytes] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
         mic = MicStream(sample_rate=self.sample_rate, frame_length=self.frame_length)
+        self._mic = mic
         loop = asyncio.get_running_loop()
 
         def on_frame(frame: np.ndarray) -> None:
             event = self.feed(frame)
             if event is not None:
-                loop.call_soon_threadsafe(queue.put_nowait, event)
+                loop.call_soon_threadsafe(activations.put_nowait, event)
+
+            # Ship raw bytes to the audio queue; on overflow drop the
+            # oldest frame so the producer stays real-time.
+            pcm = frame.tobytes()
+
+            def _enqueue() -> None:
+                if audio.full():
+                    try:
+                        audio.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                audio.put_nowait(pcm)
+
+            loop.call_soon_threadsafe(_enqueue)
 
         await mic.start(on_frame)
-        return queue
+        return activations, audio
+
+    def stop(self) -> None:
+        if self._mic is not None:
+            self._mic.stop()
+            self._mic = None

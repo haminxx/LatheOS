@@ -5,6 +5,12 @@ partitioned NVMe drive, renders a stark monochrome Sway desktop, and launches
 the **CAM Local Daemon** that bridges "Hey CAM" / handclap activations to the
 cloud proxy over a persistent WebSocket.
 
+> **First time here?** Read [`SETUP.md`](./SETUP.md) for the zero-to-working
+> runbook covering both this repo and the [CAM Cloud Proxy](https://github.com/haminxx/CAM-LatheOS-Agent-)
+> side (AWS setup, vendor keys, ISO flash, hardware token provisioning,
+> first-boot verification). The sections below are reference material for
+> after you're up and running.
+
 **LatheOS is NixOS.** The flake at `flake.nix` pins
 [`nixpkgs/nixos-24.11`](https://github.com/NixOS/nixpkgs/tree/nixos-24.11) as its
 only base — everything else is a layer on top of stock NixOS. The installer ISO

@@ -9,6 +9,18 @@
 { config, pkgs, lib, ... }:
 
 let
+  # Cursor IDE ships only as an x86_64 AppImage today. Gate it so aarch64
+  # builds still evaluate cleanly; the $mod+c keybind stays defined but
+  # points at a stub `cursor-unavailable` that logs and exits.
+  isX86 = pkgs.stdenv.hostPlatform.isx86_64;
+  cursorBin =
+    if isX86
+    then "${pkgs.code-cursor}/bin/cursor"
+    else "${pkgs.writeShellScript "cursor-unavailable" ''
+      notify-send "Cursor not available on $(uname -m)" || true
+      exit 1
+    ''}";
+
   # Single source of truth for the palette. Every themed component reads from
   # here so a one-line change restyles the whole OS.
   palette = {
@@ -83,6 +95,16 @@ let
     bindsym $mod+v splitv
     bindsym $mod+f fullscreen toggle
 
+    # Cursor IDE — the primary dev surface on LatheOS. $mod+c opens it on
+    # whatever the current workspace is; CAM can also issue
+    #   {"action":"open_app","command":"cursor <path>"}
+    # via the daemon executor to open a specific project (see
+    # daemon/cam_daemon/executor.py — "cursor" is on the allowlist).
+    bindsym $mod+c exec ${cursorBin}
+    # Keep Cursor borders minimal to match the LatheOS monochrome aesthetic.
+    for_window [app_id="Cursor"] border pixel 1
+    for_window [class="Cursor"]  border pixel 1
+
     # Workspaces 1–9.
     bindsym $mod+1 workspace number 1
     bindsym $mod+2 workspace number 2
@@ -117,13 +139,17 @@ let
   '';
 
 in {
+  # Cursor is proprietary; accept that on x86_64 hosts only.
+  nixpkgs.config.allowUnfreePredicate = pkg:
+    isX86 && builtins.elem (lib.getName pkg) [ "cursor" "code-cursor" ];
+
   programs.sway = {
     enable = true;
     wrapperFeatures.gtk = true;
     extraPackages = with pkgs; [
       foot swaylock swayidle wofi mako grim slurp swappy wl-clipboard
-      jetbrains-mono
-    ];
+      jetbrains-mono libnotify
+    ] ++ lib.optionals isX86 [ pkgs.code-cursor ];
   };
 
   # Publish the generated config at a stable path and symlink it into the
