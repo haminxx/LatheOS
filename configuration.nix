@@ -14,6 +14,10 @@
     ./modules/audio.nix
     ./modules/cam-daemon.nix
     ./modules/storage.nix
+    ./modules/local-llm.nix       # Local Ollama + whisper + piper (offline-first AI).
+    ./modules/embedded-shell.nix  # Scaffold for the in-OS Monaco + chat window.
+    ./modules/greeter.nix         # CAM "Jarvis" login briefing (status + voice).
+    ./modules/vault.nix           # Age-encrypted, cross-platform-visible secret vault.
   ];
 
   # ---- identity ---------------------------------------------------------------

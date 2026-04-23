@@ -105,6 +105,16 @@ let
     for_window [app_id="Cursor"] border pixel 1
     for_window [class="Cursor"]  border pixel 1
 
+    # Embedded LatheOS shell (`lathe` — Jarvis HUD + chat + terminal). This
+    # is the offline-first dev surface; Cursor is the heavyweight option.
+    bindsym $mod+o exec foot -T "LatheOS Shell" lathe --color
+    for_window [title="LatheOS Shell"] border pixel 1
+
+    # Push-to-talk — lets us live without Picovoice while the key is pending.
+    # Tap the bind, camctl synthesises a wake_word activation; the daemon
+    # opens a session exactly as it would for "Hey CAM".
+    bindsym $mod+space exec camctl activate --kind wake_word
+
     # Workspaces 1–9.
     bindsym $mod+1 workspace number 1
     bindsym $mod+2 workspace number 2

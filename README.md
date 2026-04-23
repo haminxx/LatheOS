@@ -150,3 +150,38 @@ git remote -v
 ```
 
 `git push origin main` lands in the `haminxx/LatheOS` repo.
+
+## Extended platform (portable drive, self-repair, embedded shell)
+
+For the roadmap that covers **exFAT portability across OSes**, **Nix-backed self-repair**, and a **menu/voice-first embedded editor** (vs. launching full Cursor/VS Code first), see [`docs/LATHEOS_VIBE_PLATFORM.md`](docs/LATHEOS_VIBE_PLATFORM.md). Repository layout is in [`docs/REPO_STRUCTURE.md`](docs/REPO_STRUCTURE.md).
+
+## Where we are right now
+
+The one-pager status, Mermaid architecture, and blocker list are in
+[`docs/PLAN.md`](docs/PLAN.md). Short version:
+
+- `lathe` (the Jarvis-style ASCII embedded shell) is **built**, not a stub.
+- Wake-word engine has **three backends** — openWakeWord (default, free),
+  Porcupine (opt-in, needs Picovoice key), clap + `$mod+space` push-to-talk
+  (always on).
+- Offline model bake is **wired end-to-end**: `scripts/prefetch-models.sh`
+  downloads Ollama + Piper + Whisper + openWakeWord weights, and
+  `scripts/build-usb-image.sh` seeds them onto the exFAT partition so the
+  USB works with no network on first boot.
+- Installers for Windows / macOS / Linux all accept `--wake-backend` and
+  only prompt for a Picovoice key if you pick Porcupine explicitly.
+- The actual ISO/USB build must still run on a **Linux host** (WSL2 works)
+  or the `release` GitHub workflow — Windows cannot format ext4 + exFAT
+  loopbacks natively.
+
+Local dev loop for the embedded shell:
+
+```bash
+make shell-dev          # runs `lathe --color` in a venv
+```
+
+Full offline USB bundle (requires Linux + root + ~10 GB disk):
+
+```bash
+make release            # prefetch + image + zip
+```

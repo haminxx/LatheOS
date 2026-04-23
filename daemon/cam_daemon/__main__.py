@@ -93,6 +93,7 @@ async def main_loop() -> None:
     activator = Activator(
         access_key=os.environ.get("PICOVOICE_ACCESS_KEY"),
         keyword_path=os.environ.get("CAM_KEYWORD_PATH"),
+        backend=os.environ.get("LATHEOS_WAKE_BACKEND"),
     )
     speaker = SpeakerSink(sample_rate=24_000)
     speaker.start()

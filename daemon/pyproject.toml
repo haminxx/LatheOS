@@ -8,15 +8,25 @@ version = "0.1.0"
 description = "Local LatheOS wake-word + WebSocket bridge to CAM Cloud Proxy"
 readme = "../README.md"
 requires-python = ">=3.11"
+# Core runtime deps — everything below is required. The wake-word engine
+# is intentionally NOT listed here; see [project.optional-dependencies].
+# This keeps cam-daemon fully functional in "clap + PTT" mode with zero
+# third-party wake engines, and lets the Nix module opt into a backend.
 dependencies = [
     "websockets>=13.1",
-    "pvporcupine>=3.0.2",
     "sounddevice>=0.5.1",
     "numpy>=1.26",
     "aubio>=0.4.9",
     "orjson>=3.10",
     "structlog>=24.4",
+    "httpx>=0.27",
 ]
+
+[project.optional-dependencies]
+# `pip install .[oww]` pulls openWakeWord (Apache-2.0, ONNX; no API key).
+oww = ["openwakeword>=0.6.0", "onnxruntime>=1.18"]
+# `pip install .[picovoice]` pulls Porcupine (proprietary; needs PV key).
+picovoice = ["pvporcupine>=3.0.2"]
 
 [project.scripts]
 cam-daemon = "cam_daemon.__main__:main"

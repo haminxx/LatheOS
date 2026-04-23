@@ -1,0 +1,127 @@
+################################################################################
+# LatheOS release build — produces the plug-and-play USB bundle end users
+# download. Runs on tag pushes (v*) and on manual dispatch.
+#
+# Output (attached to the GitHub Release):
+#   latheos-usb.zip   complete bundle: raw image + installers + launchers + README
+#   latheos-usb.img.sha256  checksum of the raw image inside the zip
+################################################################################
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      size:
+        description: "Raw image size (NixOS will expand /assets on first boot)"
+        default: "24G"
+        required: false
+      prefetch:
+        description: "Pre-bake AI models into the image (voice+small heavy ~7 GB). 'big' adds codestral 22B (~22 GB)."
+        default: "small"
+        required: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  usb-image:
+    name: build latheos-usb.img + release zip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write    # required to attach files to the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-24.11
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: reclaim disk for image + closure
+        run: |
+          sudo rm -rf /opt/hostedtoolcache \
+                      /usr/local/share/boost \
+                      /usr/local/lib/android \
+                      /usr/share/dotnet \
+                      /usr/share/swift || true
+          df -h
+
+      - name: install host-side build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y parted dosfstools e2fsprogs exfatprogs util-linux gdisk zip python3-pip curl
+          # Ollama is only needed during the prefetch phase for `ollama pull`.
+          curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: prefetch AI models (optional bake)
+        if: ${{ github.event.inputs.prefetch != 'none' && github.event.inputs.prefetch != '' }}
+        env:
+          HEAVY: ${{ github.event.inputs.prefetch }}
+        run: |
+          python3 -m pip install --user openwakeword onnxruntime || true
+          ./scripts/prefetch-models.sh
+
+      - name: build USB image
+        run: |
+          SIZE="${{ github.event.inputs.size }}"
+          SIZE="${SIZE:-24G}"
+          sudo --preserve-env=PATH ./scripts/build-usb-image.sh --size "${SIZE}"
+
+      - name: summarise artefact
+        id: bundle
+        run: |
+          ZIP=dist/latheos-usb.zip
+          IMG=dist/latheos-usb.img
+          ZSIZE=$(du -h "$ZIP" | cut -f1)
+          ISIZE=$(du -h "$IMG" | cut -f1)
+          SHA=$(sha256sum "$IMG" | cut -d' ' -f1)
+          echo "zip=$ZIP"  >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA"  >> "$GITHUB_OUTPUT"
+          {
+            echo "### LatheOS USB release"
+            echo ""
+            echo "| field            | value |"
+            echo "|------------------|-------|"
+            echo "| zip              | \`$ZIP\` ($ZSIZE) |"
+            echo "| raw image size   | $ISIZE |"
+            echo "| raw image sha256 | \`$SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/latheos-usb.zip
+            dist/latheos-usb.img.sha256
+          generate_release_notes: true
+          body: |
+            **LatheOS portable USB release.**
+
+            Download `latheos-usb.zip`, extract, and follow `README.md` inside:
+
+            - **Windows**: `installer/windows/Install-LatheOS.ps1`
+            - **Linux**:   `installer/linux/install-latheos.sh`
+            - **macOS**:   `installer/macos/install-latheos.command`
+
+            Raw image sha256: `${{ steps.bundle.outputs.sha }}`
+
+      - name: upload artifact (non-tag runs)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: latheos-usb-${{ github.sha }}
+          path: dist/latheos-usb.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: help check eval build-x86 build-aarch64 iso iso-aarch64 switch lint-daemon fetch-base flash
+.PHONY: help check eval build-x86 build-aarch64 iso iso-aarch64 usb-image release switch lint-daemon fetch-base flash
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS=":.*?## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -22,6 +22,23 @@ iso: ## Build the x86_64 LatheOS installer ISO
 
 iso-aarch64: ## Build the aarch64 LatheOS installer ISO
 	ARCH=aarch64 ./scripts/build-latheos-iso.sh
+
+usb-image: ## Build the flashable USB image (Linux host, sudo required)
+	sudo ./scripts/build-usb-image.sh
+
+prefetch: ## Pre-bake AI models into dist/prefetch/ (Ollama + Piper + Whisper + OWW)
+	./scripts/prefetch-models.sh
+
+prefetch-big: ## Same as prefetch but also pulls Codestral 22B (~22 GB total)
+	HEAVY=big ./scripts/prefetch-models.sh
+
+release: prefetch usb-image ## Full offline-ready USB bundle (prefetch + image + zip)
+	@ls -lh dist/latheos-usb.zip dist/latheos-usb.img
+
+shell-dev: ## Run the embedded shell locally (dev install)
+	cd platform/embedded-shell && \
+	  python3 -m venv .venv && . .venv/bin/activate && \
+	  pip install -e . && lathe --color
 
 fetch-base: ## Download the upstream NixOS minimal ISO (dual-install path)
 	./scripts/fetch-nixos-base.sh

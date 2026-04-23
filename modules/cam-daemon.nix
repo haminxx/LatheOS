@@ -18,10 +18,18 @@
 let
   py = pkgs.python3Packages;
 
-  # Optional wake-word packages — pulled in only if the overlay provides them.
+  # Optional wake-word backends. We enable whichever nixpkgs exposes; the
+  # daemon itself chooses which one runs at boot via LATHEOS_WAKE_BACKEND
+  # (see daemon/cam_daemon/wake.py). Defaults to openWakeWord when present.
+  #
+  # Priority in our own overlays:
+  #   openwakeword  -> Apache-2.0, ONNX, no vendor key (DEFAULT)
+  #   pvporcupine   -> proprietary, needs PICOVOICE_ACCESS_KEY
+  #   aubio         -> always-on clap onset detector
   optionalWakePkgs =
-       lib.optionals (py ? pvporcupine) [ py.pvporcupine ]
-    ++ lib.optionals (py ? aubio)       [ py.aubio ];
+       lib.optionals (py ? openwakeword) [ py.openwakeword py.onnxruntime ]
+    ++ lib.optionals (py ? pvporcupine)  [ py.pvporcupine ]
+    ++ lib.optionals (py ? aubio)        [ py.aubio ];
 
   camDaemon = py.buildPythonApplication {
     pname = "cam-daemon";
@@ -35,6 +43,7 @@ let
       py.numpy
       py.orjson
       py.structlog
+      py.httpx
     ] ++ optionalWakePkgs;
     doCheck = false;
     # sounddevice dlopens libportaudio at runtime; point LD_LIBRARY_PATH at it.
@@ -54,13 +63,38 @@ in {
 
   # Runtime configuration — overridden at flash time via an env-file on the
   # persistent partition. Never commit this file to the store.
+  #
+  # LatheOS is now LOCAL-FIRST: by default the daemon routes prompts to the
+  # on-disk Ollama instance documented in modules/local-llm.nix. The cloud
+  # proxy becomes an OPT-IN "bigger brain" — set CAM_PROXY_URL in
+  # /persist/secrets/cam.env to enable it. Leaving it blank keeps the whole
+  # OS offline-capable, which is required for the self-repair story (if the
+  # network is what broke, the agent must still be able to fix it).
   environment.etc."latheos/cam.env".text = ''
-    CAM_PROXY_URL=wss://cam.example.com/ws/cam
     CAM_SAMPLE_RATE=16000
+
+    # --- Local AI (always on; see modules/local-llm.nix) -----------------
+    CAM_LOCAL_LLM_URL=http://127.0.0.1:11434
+    # The daemon reads LATHEOS_VOICE_MODEL / LATHEOS_HEAVY_MODEL from
+    # /etc/latheos/llm.env; no need to duplicate the model names here.
+
+    # --- Wake word -------------------------------------------------------
+    # Default backend is openWakeWord (Apache-2.0, ONNX, no vendor key).
+    # Swap to "porcupine" on a drive that has a valid PICOVOICE_ACCESS_KEY,
+    # or "none" to disable and rely purely on clap + $mod+space PTT.
+    LATHEOS_WAKE_BACKEND=oww
+
+    # --- Cloud proxy (OPT-IN) --------------------------------------------
+    # Leave blank to stay fully offline. Set in /persist/secrets/cam.env to
+    # route to the AWS-hosted CAM Cloud Proxy for larger models / streaming
+    # STT + TTS.
+    CAM_PROXY_URL=
+
     # Overridden by /persist/secrets/cam.env on production drives:
-    #   PICOVOICE_ACCESS_KEY=<Picovoice console key>
-    #   CAM_HARDWARE_TOKEN=<32-char HW fingerprint>
-    #   CAM_KEYWORD_PATH=/etc/latheos/hey-cam.ppn
+    #   PICOVOICE_ACCESS_KEY=<Picovoice console key>     (only for porcupine backend)
+    #   CAM_HARDWARE_TOKEN=<32-char HW fingerprint>      (only if cloud enabled)
+    #   CAM_KEYWORD_PATH=/etc/latheos/hey-cam.ppn        (only for porcupine backend)
+    #   LATHEOS_WAKE_BACKEND=oww|porcupine|none
   '';
 
   systemd.services.cam-daemon = {
@@ -82,7 +116,9 @@ in {
       SupplementaryGroups = [ "video" "input" ];
       EnvironmentFile = [
         "/etc/latheos/cam.env"
+        "/etc/latheos/llm.env"        # local model names + local endpoint
         "-/persist/secrets/cam.env"   # optional, overrides the baked values
+        "-/persist/secrets/llm.env"   # optional, per-drive model overrides
       ];
 
       # ---- hardening ----
