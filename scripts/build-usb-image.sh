@@ -25,6 +25,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="${REPO_ROOT}/dist"
 IMG="${DIST_DIR}/latheos-usb.img"
 ZIP="${DIST_DIR}/latheos-usb.zip"
+PREFETCH="${DIST_DIR}/prefetch"   # optional pre-fetched AI models (see prefetch-models.sh)
 
 ARCH="x86_64"
 SIZE="16G"     # total image size. User's real stick can be bigger — NixOS will resize /assets on first boot.
@@ -83,18 +84,31 @@ log "system closure: ${SYSTEM_PATH}"
 log "allocating sparse image (${SIZE})..."
 truncate -s "${SIZE}" "$IMG"
 
+# Size the exFAT /assets partition so it can actually hold the pre-fetched
+# models we bake in (if any), plus headroom. It is the LAST partition, so the
+# first-boot service still grows it to fill the physical stick. With no
+# prefetch dir we keep the small 2 GiB placeholder (models pull on first boot).
+DATA_MIB=2048
+if [ -d "$PREFETCH" ]; then
+  PF_MIB=$(du -sm "$PREFETCH" | cut -f1)
+  DATA_MIB=$(( PF_MIB + 2048 ))   # models + 2 GiB headroom
+  log "pre-fetch is ${PF_MIB} MiB; sizing /assets partition to ${DATA_MIB} MiB"
+fi
+# parted location for the cryptroot->data boundary, measured from the disk END.
+DATA_START="-${DATA_MIB}MiB"
+
 log "partitioning..."
 # NB: the `--` is REQUIRED. The cryptroot/data partitions use negative,
-# from-the-end offsets ("-2049MiB" = 2049 MiB before the disk end). Without
-# `--`, parted parses that leading dash as option flags (-2 -0 -4 ...) and
-# aborts with "invalid option". `--` stops option parsing so the values are
+# from-the-end offsets ("-${DATA_MIB}MiB" = that many MiB before the disk end).
+# Without `--`, parted parses the leading dash as option flags (-2 -0 -4 ...)
+# and aborts with "invalid option". `--` stops option parsing so the values are
 # read as partition positions.
 parted -s "$IMG" -- \
   mklabel gpt \
   mkpart ESP fat32 1MiB 1025MiB \
   set 1 esp on \
-  mkpart cryptroot 1025MiB -2049MiB \
-  mkpart data      -2049MiB 100%
+  mkpart cryptroot 1025MiB "$DATA_START" \
+  mkpart data      "$DATA_START" 100%
 
 # ---------------------------------------------------------------------------
 # 3. Map as loopback device, LUKS-encrypt the root, and format each partition.
@@ -164,7 +178,6 @@ cp -r "${REPO_ROOT}/installer/." "${MNT}/assets/installer/"
 #     stage Ollama / Piper / whisper / openWakeWord weights. If they didn't,
 #     we keep building — the image still boots, just pulls on first network.
 # ---------------------------------------------------------------------------
-PREFETCH="${DIST_DIR}/prefetch"
 if [ -d "$PREFETCH" ]; then
   log "copying pre-fetched models from ${PREFETCH} into /assets/models"
   mkdir -p \
