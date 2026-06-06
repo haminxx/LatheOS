@@ -33,7 +33,7 @@ Open PowerShell **as Administrator** in this folder, then:
 | `%LOCALAPPDATA%\LatheOS\cache\` | Downloaded `latheos-usb.img.zip` + extracted `.img`. Delete to force a fresh download. |
 | USB partition 1 (FAT32 / ESP) | Bootloader — do not touch. |
 | USB partition 2 (ext4, LatheOS root) | Written by the flasher; LatheOS expands it on first boot. |
-| USB partition 3 (exFAT `LATHE_ASSETS`) | `latheos\firstrun.json`, optional `latheos\secrets\cam.env`, and the `launcher\` folder. Visible from Windows/Mac/Linux. |
+| USB partition 3 (exFAT `LATHEASSETS`) | `latheos\firstrun.json`, optional `latheos\secrets\cam.env`, and the `launcher\` folder. Visible from Windows/Mac/Linux. |
 
 ## Safety notes
 

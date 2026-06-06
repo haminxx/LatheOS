@@ -32,7 +32,7 @@ You get a USB with three partitions:
 |---|---|---|
 | `ESP` (FAT32) | Yes | Bootloader. |
 | `latheos` (ext4) | **Linux only** | NixOS + `/persist/secrets` (vault key, model selection in `llm.env`, optional Porcupine key). |
-| `LATHE_ASSETS` (exFAT) | **Yes, all OSes** | Your projects + models + encrypted vault + host launchers. |
+| `LATHEASSETS` (exFAT) | **Yes, all OSes** | Your projects + models + encrypted vault + host launchers. |
 
 Two ways to use it:
 
@@ -55,7 +55,7 @@ Mode A and Mode B read/write the **same bytes** on the USB, so whatever you do i
 ## First boot experience
 
 1. LatheOS applies the language + timezone you picked in the installer.
-2. It auto-generates an **age keypair**: private key stays on the Linux-only `latheos` partition; public key sits on `LATHE_ASSETS/vault/PUBLIC_KEY.txt` for you to share if you want.
+2. It auto-generates an **age keypair**: private key stays on the Linux-only `latheos` partition; public key sits on `LATHEASSETS/vault/PUBLIC_KEY.txt` for you to share if you want.
 3. CAM speaks a short **status briefing** in your language.
 4. Models download in the background (≈ 2 GB voice + 5–15 GB coder depending on your machine's RAM). Until they arrive, CAM uses a templated fallback.
 

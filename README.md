@@ -79,7 +79,7 @@ sudo /etc/latheos/install.sh
 ```
 
 The live installer prompts for disk and hostname only, partitions
-the NVMe (ESP + ext4 `latheos` + exFAT `LATHE_ASSETS`), and hands off to
+the NVMe (ESP + ext4 `latheos` + exFAT `LATHEASSETS`), and hands off to
 `nixos-install --flake .#latheos-x86_64`. Reboot when it finishes — you're on
 LatheOS. There is no token to provision: the assistant is fully local.
 
@@ -111,7 +111,7 @@ with [Rufus](https://rufus.ie) or [balenaEtcher](https://etcher.balena.io).
 ```
 /dev/nvme0n1p1  vfat   513 MiB   LABEL=ESP              → /boot
 /dev/nvme0n1p2  ext4   ~80 %     LABEL=latheos          → /
-/dev/nvme0n1p3  exfat  remainder LABEL=LATHE_ASSETS     → /assets    (cross-OS)
+/dev/nvme0n1p3  exfat  remainder LABEL=LATHEASSETS     → /assets    (cross-OS)
 ```
 
 The installer script writes this layout automatically. `/persist/secrets/`

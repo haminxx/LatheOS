@@ -8,7 +8,7 @@
 #   p1  ESP    vfat        unencrypted bootloader (/boot)        LABEL=ESP
 #   p2  root   LUKS2+ext4  ENCRYPTED OS + /persist + documents   PARTLABEL=cryptroot
 #                          (the decrypted ext4 carries LABEL=latheos)
-#   p3  shared exfat        UNENCRYPTED cross-OS file drop        LABEL=LATHE_ASSETS
+#   p3  shared exfat        UNENCRYPTED cross-OS file drop        LABEL=LATHEASSETS
 #
 # Privacy model (the "balanced" choice):
 #   * The OS, /persist/secrets, the vault private key, and the user's private
@@ -47,7 +47,7 @@
   };
 
   fileSystems."/assets" = {
-    device = "/dev/disk/by-label/LATHE_ASSETS";
+    device = "/dev/disk/by-label/LATHEASSETS";
     fsType = "exfat";
     options = [
       "uid=1000" "gid=100" "umask=007"

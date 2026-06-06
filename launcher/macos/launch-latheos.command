@@ -37,7 +37,7 @@ command -v qemu-system-x86_64 >/dev/null 2>&1 || {
 # `diskutil list` is the canonical way on macOS. We match by LatheOS labels.
 USB_ID="$(
   diskutil list \
-    | awk '/LATHE_ASSETS|latheos|ESP/{print $NF}' \
+    | awk '/LATHEASSETS|latheos|ESP/{print $NF}' \
     | grep -E '^disk[0-9]+s[0-9]+$' \
     | head -n1 \
     | sed -E 's/s[0-9]+$//'

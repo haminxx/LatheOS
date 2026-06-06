@@ -73,7 +73,7 @@ log "system closure: ${SYSTEM_PATH}"
 #       p1  ESP        FAT32       1 GiB                 (LABEL=ESP, unencrypted)
 #       p2  cryptroot  LUKS2+ext4  remainder - 2 GiB     (PARTLABEL=cryptroot;
 #                                  decrypted ext4 LABEL=latheos)
-#       p3  data       exfat       2 GiB (placeholder)   (LABEL=LATHE_ASSETS)
+#       p3  data       exfat       2 GiB (placeholder)   (LABEL=LATHEASSETS)
 #    The user's real stick will be bigger than 16 GiB; a first-boot
 #    growpart-style service will expand /assets to fill the stick.
 #
@@ -111,7 +111,7 @@ printf '%s' "${INITIAL_LUKS_PASS}" | cryptsetup open "${LOOP}p2" "${CRYPT_NAME}"
 log "formatting partitions..."
 mkfs.fat  -F 32 -n ESP          "${LOOP}p1"
 mkfs.ext4 -F    -L latheos      "/dev/mapper/${CRYPT_NAME}"
-mkfs.exfat      -L LATHE_ASSETS "${LOOP}p3"
+mkfs.exfat      -L LATHEASSETS "${LOOP}p3"
 
 # ---------------------------------------------------------------------------
 # 4. Mount and install NixOS into the decrypted ext4 partition.

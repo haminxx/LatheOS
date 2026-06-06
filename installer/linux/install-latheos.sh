@@ -78,9 +78,9 @@ sync
 partprobe "$DEV"
 
 # Find the exFAT partition by label so we can drop firstrun.json onto it.
-echo "locating LATHE_ASSETS partition..."
+echo "locating LATHEASSETS partition..."
 for _ in 1 2 3 4 5; do
-  ASSETS=$(lsblk -lpno NAME,LABEL "$DEV" | awk '$2=="LATHE_ASSETS"{print $1}' | head -n1)
+  ASSETS=$(lsblk -lpno NAME,LABEL "$DEV" | awk '$2=="LATHEASSETS"{print $1}' | head -n1)
   [[ -n "${ASSETS:-}" ]] && break
   sleep 1
 done
@@ -115,7 +115,7 @@ EOF
   rmdir "$MNT"
   echo "first-run profile staged (lang=$LANGUAGE, wake=$WAKE_BACKEND)."
 else
-  echo "warning: LATHE_ASSETS partition not found; first-run profile NOT staged."
+  echo "warning: LATHEASSETS partition not found; first-run profile NOT staged."
 fi
 
 echo ""

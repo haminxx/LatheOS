@@ -22,7 +22,7 @@ flowchart TB
   subgraph USB["USB stick (3 partitions)"]
     ESP["ESP — bootloader (+ launchers)"]
     EXT4["ext4 'latheos' — NixOS root + /persist"]
-    EXFAT["exFAT 'LATHE_ASSETS'\nprojects + models + vault + launchers\n(readable on Win/Mac/Linux)"]
+    EXFAT["exFAT 'LATHEASSETS'\nprojects + models + vault + launchers\n(readable on Win/Mac/Linux)"]
   end
 
   subgraph BOOT["Mode A — boot from USB"]

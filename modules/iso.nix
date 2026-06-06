@@ -82,7 +82,7 @@
       if [[ "''${DISK}" =~ nvme|mmcblk ]]; then SFX="p"; else SFX=""; fi
       ${pkgs.dosfstools}/bin/mkfs.fat  -F 32 -n ESP          "''${DISK}''${SFX}1"
       ${pkgs.e2fsprogs}/bin/mkfs.ext4  -F    -L latheos      "''${DISK}''${SFX}2"
-      ${pkgs.exfatprogs}/bin/mkfs.exfat -L LATHE_ASSETS      "''${DISK}''${SFX}3"
+      ${pkgs.exfatprogs}/bin/mkfs.exfat -L LATHEASSETS      "''${DISK}''${SFX}3"
 
       mount "''${DISK}''${SFX}2" /mnt
       mkdir -p /mnt/boot /mnt/assets /mnt/persist/secrets

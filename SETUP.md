@@ -134,7 +134,7 @@ It asks **two** questions:
 There is no hardware token step. The installer then:
 
 - Partitions the NVMe: 513 MiB ESP, ~90% ext4 (LABEL `latheos`), remainder
-  exFAT (LABEL `LATHE_ASSETS` — this partition is cross-platform so you can
+  exFAT (LABEL `LATHEASSETS` — this partition is cross-platform so you can
   plug the drive into macOS/Windows to move big files and models).
 - Clones the LatheOS flake into `/etc/nixos/latheos`.
 - Runs `nixos-install --flake .#latheos-x86_64`.

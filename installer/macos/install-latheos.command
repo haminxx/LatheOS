@@ -58,7 +58,7 @@ sync
 diskutil list "/dev/$D" >/dev/null || true
 ASSETS_VOL=""
 for _ in 1 2 3 4 5; do
-  ASSETS_VOL=$(diskutil info /Volumes/LATHE_ASSETS 2>/dev/null | awk -F': *' '/Mount Point/{print $2}')
+  ASSETS_VOL=$(diskutil info /Volumes/LATHEASSETS 2>/dev/null | awk -F': *' '/Mount Point/{print $2}')
   [[ -n "$ASSETS_VOL" ]] && break
   diskutil mountDisk "/dev/$D" >/dev/null || true
   sleep 1
@@ -89,7 +89,7 @@ EOF
   fi
   echo "first-run profile staged (lang=$LANGUAGE, wake=$WAKE_BACKEND)."
 else
-  echo "warning: LATHE_ASSETS not mounted; first-run profile NOT staged."
+  echo "warning: LATHEASSETS not mounted; first-run profile NOT staged."
 fi
 
 echo ""

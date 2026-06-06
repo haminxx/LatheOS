@@ -19,7 +19,7 @@ One stick, three partitions:
 |---|------|----|-------|---------|-----------|
 | 1 | ~1 GiB | FAT32 | `ESP` | EFI boot (+ launchers for Win/Mac/Linux) | Yes (readable) |
 | 2 | **32 GiB** | ext4 | `latheos` | NixOS root + `/persist` (writable) | Linux only |
-| 3 | **remainder** | exFAT | `LATHE_ASSETS` | Models + your projects + secrets vault | **Yes — all 3 OSes** |
+| 3 | **remainder** | exFAT | `LATHEASSETS` | Models + your projects + secrets vault | **Yes — all 3 OSes** |
 
 The 32 GiB root gives plenty of headroom for multiple NixOS generations + cached store without stealing user space. On a 1 TB stick that still leaves ~960 GB for models + projects.
 
@@ -51,7 +51,7 @@ Same USB, but you stay in macOS / Windows / Linux and just open a window.
 
 ### How it works
 
-- The exFAT partition ships a **launcher folder** (e.g. `LATHE_ASSETS/launcher/`) with **per-host** scripts + README:
+- The exFAT partition ships a **launcher folder** (e.g. `LATHEASSETS/launcher/`) with **per-host** scripts + README:
   - **macOS**: invoke **QEMU** (Intel) or **UTM/Virtualization.framework** (Apple Silicon) against the raw USB block device **or** a bundled `disk.qcow2`.
   - **Windows**: invoke **QEMU for Windows** (bundled) pointing at the USB.
   - **Linux**: invoke **QEMU/KVM** from the system packages.
@@ -156,7 +156,7 @@ Full setup, constraints, and the HTTP contract live in
 ### 4.2 Where they live on disk
 
 - **Binaries**: built through Nix, part of the root FS — versioned with the flake.
-- **Weights**: **NOT** in the Nix store (too big, changes too often). Stored on the **exFAT** partition under `LATHE_ASSETS/models/`. The daemon reads them through a config path.
+- **Weights**: **NOT** in the Nix store (too big, changes too often). Stored on the **exFAT** partition under `LATHEASSETS/models/`. The daemon reads them through a config path.
 - **Cache**: `/persist/cache/llm/` for k/v cache, prompts, tokenizers.
 
 ### 4.3 No cloud — everything is on-device
@@ -247,7 +247,7 @@ Safety rules (non-negotiable):
 
 1. **Dry-run first** (`nix flake check`, `nixos-rebuild build`) before **any** `switch`.
 2. **Boot generation kept** — NixOS already lets you pick the previous generation from the boot menu if the new one can’t boot.
-3. **Allowlist** the executor: only specific commands and specific file roots (`/etc/nixos`, `/persist/projects`, `LATHE_ASSETS/projects`).
+3. **Allowlist** the executor: only specific commands and specific file roots (`/etc/nixos`, `/persist/projects`, `LATHEASSETS/projects`).
 4. **No secret leakage** — redact `/persist/secrets/**` before anything goes into an LLM prompt.
 
 ---

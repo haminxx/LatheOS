@@ -28,16 +28,16 @@ need lsblk
 
 # --- Detect the LatheOS USB ------------------------------------------------
 # We look for a whole-disk device whose GPT hosts a partition with the
-# `LATHE_ASSETS` label (our exFAT side). This survives device renaming
+# `LATHEASSETS` label (our exFAT side). This survives device renaming
 # across boots.
 usb_device() {
-  lsblk -lpno NAME,LABEL | awk '$2=="LATHE_ASSETS"{print $1}' | head -n1 \
+  lsblk -lpno NAME,LABEL | awk '$2=="LATHEASSETS"{print $1}' | head -n1 \
     | sed -E 's/p?[0-9]+$//'
 }
 
 USB="$(usb_device || true)"
 if [[ -z "${USB:-}" ]]; then
-  echo "Could not find a LatheOS USB (no partition labelled LATHE_ASSETS)."
+  echo "Could not find a LatheOS USB (no partition labelled LATHEASSETS)."
   echo "Plug the stick in, wait a few seconds, and try again."
   exit 1
 fi

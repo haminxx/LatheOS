@@ -18,7 +18,7 @@
          "open in a window" experience to any host later.
       5. Write a minimal first-run profile (preferred language, timezone,
          optional Picovoice key) onto the exFAT partition as
-         LATHE_ASSETS/firstrun.json — the in-OS greeter reads it on boot.
+         LATHEASSETS/firstrun.json — the in-OS greeter reads it on boot.
 
     After this script finishes, the user:
       * can reboot, pick the USB in the firmware boot menu, and LatheOS
@@ -163,10 +163,10 @@ function Write-FirstRunProfile {
     $assetsVol = Get-Partition -DiskNumber $Disk.Number |
         Where-Object { $_.Type -ne 'Reserved' } |
         ForEach-Object { Get-Volume -Partition $_ -ErrorAction SilentlyContinue } |
-        Where-Object { $_.FileSystemLabel -eq 'LATHE_ASSETS' } | Select-Object -First 1
+        Where-Object { $_.FileSystemLabel -eq 'LATHEASSETS' } | Select-Object -First 1
 
     if (-not $assetsVol) {
-        Write-Warning "Could not locate the LATHE_ASSETS partition from Windows."
+        Write-Warning "Could not locate the LATHEASSETS partition from Windows."
         Write-Warning "First-run profile NOT written — LatheOS will boot with defaults."
         return
     }
