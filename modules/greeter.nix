@@ -40,11 +40,15 @@ let
       set -euo pipefail
 
       # --- 0. Load environment (model names, endpoints, voice paths) -------
-      # shellcheck disable=SC1091
-      [ -r /etc/latheos/llm.env ] && . /etc/latheos/llm.env
-      [ -r /etc/latheos/tts.env ] && . /etc/latheos/tts.env || true
-      [ -r /run/latheos/tts-backend.env ] && . /run/latheos/tts-backend.env || true
-      [ -r /persist/secrets/llm.env ] && . /persist/secrets/llm.env || true
+      # if/then (not A && B || C) keeps ShellCheck happy (SC2015); the
+      # source=/dev/null directive silences SC1091 for these runtime files.
+      for env_file in /etc/latheos/llm.env /etc/latheos/tts.env \
+                      /run/latheos/tts-backend.env /persist/secrets/llm.env; do
+        if [ -r "$env_file" ]; then
+          # shellcheck source=/dev/null
+          . "$env_file" || true
+        fi
+      done
 
       LLM_URL="''${LATHEOS_LLM_URL:-http://127.0.0.1:11434}"
       VOICE_MODEL="''${LATHEOS_VOICE_MODEL:-llama3.2:3b}"
@@ -141,13 +145,13 @@ Last task: ''${LAST_TASK}. ''${TODO_COUNT} open items."
         if curl -fsS --max-time 60 "''${TTS_URL}/synthesize" \
              -H 'content-type: application/json' -d "$REQ" -o "$WAV" 2>/dev/null \
            && [ -s "$WAV" ]; then
-          aplay -q "$WAV" && SPOKEN=1 || true
+          if aplay -q "$WAV"; then SPOKEN=1; fi
         fi
       fi
       if [ "$SPOKEN" != 1 ] && [ -r "$PIPER_VOICE" ]; then
         printf '%s' "$BRIEFING" \
           | piper --model "$PIPER_VOICE" --output_file "$WAV" >/dev/null 2>&1 || true
-        [ -s "$WAV" ] && aplay -q "$WAV" || true
+        if [ -s "$WAV" ]; then aplay -q "$WAV" || true; fi
       fi
       rm -f "$WAV"
 
