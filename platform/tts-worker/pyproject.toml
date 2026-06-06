@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lathe-tts"
+version = "0.1.0"
+description = "LatheOS premium voice worker — MisoTTS 8B over a loopback HTTP API (opt-in, GPU-only)"
+readme = "README.md"
+requires-python = ">=3.11"
+# Only LIGHT, hermetic deps live here so modules/tts.nix can build the package
+# from nixpkgs without a PyPI fetch. The HEAVY ML stack (torch, torchaudio, the
+# MisoTTS `generator` module + its deps) is imported lazily in lathe_tts.worker
+# and provisioned via a venv on /assets — the package stays import-safe (and the
+# systemd unit exits cleanly) when there is no GPU.
+dependencies = [
+    "numpy>=1.25",          # float tensor -> s16le WAV
+]
+
+[project.optional-dependencies]
+# `pip install .[gpu]` into a venv on /assets pulls the MisoTTS runtime. torch
+# must be installed for your CUDA version first (see pytorch.org). MisoTTS
+# itself is fetched as the repo (generator.py/models.py) + HF weights.
+#   git clone https://github.com/MisoLabsAI/MisoTTS /assets/models/miso
+#   uv sync --python 3.10   (inside that repo) — see docs/VOICE_TTS.md
+gpu = [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "huggingface_hub",
+]
+
+[project.scripts]
+# Entrypoint wired by modules/tts.nix as `lathe-tts`.
+lathe-tts = "lathe_tts.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["lathe_tts*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

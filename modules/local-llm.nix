@@ -127,11 +127,6 @@ in
     # Where openWakeWord finds its ONNX weights. Populated by
     # scripts/prefetch-models.sh at image-build time.
     LATHEOS_OWW_MODELS_DIR=/assets/models/openwakeword
-
-    # Cloud proxy is OPT-IN. Leave empty to stay fully local.
-    # Set to e.g. wss://cam.example.com/ws/cam to enable the "bigger brain"
-    # upgrade path documented in docs/LATHEOS_VIBE_PLATFORM.md.
-    LATHEOS_CLOUD_PROXY_URL=
   '';
 
   ##############################################################################
@@ -149,8 +144,10 @@ in
     script = ''
       set -eu
       TOTAL_MB=$(${pkgs.gawk}/bin/awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
-      # Codestral 22B q4 wants ~16 GB; require 20 GB headroom to leave room
-      # for the voice model, editor, and host services.
+      # Default target is a mid-range 16 GB laptop: that lands on the 8B heavy
+      # model (≈6 GB), leaving headroom for the 3B voice model + the host.
+      # Codestral 22B q4 wants ~16 GB on its own, so we only pick it when the
+      # machine has ≥20 GB total — i.e. a workstation, not the 16 GB baseline.
       if [ "$TOTAL_MB" -ge 20000 ]; then
         PICK=${heavyModelBig}
       else
@@ -267,9 +264,11 @@ in
         echo "$TZ" > /persist/state/timezone
       fi
 
-      # Move pre-staged cam.env from exFAT (visible to Windows) into
-      # /persist/secrets (ext4, restricted). Delete the staging copy so
-      # no other host OS can read a stored Picovoice key later.
+      # Move any pre-staged cam.env from exFAT (visible to Windows) into
+      # /persist/secrets (ext4, restricted) and delete the staging copy so no
+      # other host OS can read it later. This is only used by drives that opt
+      # into the Porcupine wake backend (it holds PICOVOICE_ACCESS_KEY); the
+      # default openWakeWord backend needs no secrets at all.
       if [ -r /assets/latheos/secrets/cam.env ]; then
         install -m 0600 /assets/latheos/secrets/cam.env /persist/secrets/cam.env
         rm -f /assets/latheos/secrets/cam.env

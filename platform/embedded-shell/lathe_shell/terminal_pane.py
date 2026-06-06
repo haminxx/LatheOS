@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shlex
 
 from textual import on, work
 from textual.app import ComposeResult

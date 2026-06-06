@@ -50,8 +50,8 @@
   ];
 
   # A friendly one-shot installer. `sudo /etc/latheos/install.sh` answers
-  # three prompts (disk, hostname, hardware token), partitions the NVMe,
-  # and hands off to `nixos-install --flake`.
+  # two prompts (disk, hostname), partitions the NVMe, and hands off to
+  # `nixos-install --flake`. No hardware token — LatheOS is fully local.
   environment.etc."latheos/install.sh" = {
     mode = "0755";
     text = ''
@@ -66,11 +66,9 @@
 
       read -rp "Target disk (e.g. /dev/nvme0n1) : " DISK
       read -rp "Hostname                        : " HOST
-      read -rp "Hardware token                  : " TOKEN
 
       : "''${DISK:?disk required}"
       : "''${HOST:?hostname required}"
-      : "''${TOKEN:?hardware token required}"
 
       echo ""
       echo "Partitioning ''${DISK}..."
@@ -89,9 +87,6 @@
       mount "''${DISK}''${SFX}2" /mnt
       mkdir -p /mnt/boot /mnt/assets /mnt/persist/secrets
       mount "''${DISK}''${SFX}1" /mnt/boot
-
-      echo "CAM_HARDWARE_TOKEN=''${TOKEN}" > /mnt/persist/secrets/cam.env
-      chmod 600 /mnt/persist/secrets/cam.env
 
       FLAKE_DIR="/etc/nixos/latheos"
       if [[ ! -d "''${FLAKE_DIR}" ]]; then

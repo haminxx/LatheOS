@@ -16,6 +16,21 @@ import numpy as np
 import sounddevice as sd
 
 
+def play_pcm(pcm: np.ndarray, sample_rate: int) -> None:
+    """Blocking one-shot playback of an int16 mono buffer at its native rate.
+
+    Used for synthesized TTS (Piper ~22.05 kHz, MisoTTS 24 kHz). Opening the
+    stream at the buffer's own rate sidesteps any resampling — sounddevice /
+    PipeWire handle the device rate conversion for us. Best run via
+    `asyncio.to_thread` so it never stalls the daemon's event loop.
+    """
+    if pcm is None or pcm.size == 0:
+        return
+    with contextlib.suppress(Exception):
+        sd.play(pcm, samplerate=sample_rate)
+        sd.wait()
+
+
 class MicStream:
     def __init__(self, sample_rate: int = 16_000, frame_length: int = 512) -> None:
         self.sample_rate = sample_rate

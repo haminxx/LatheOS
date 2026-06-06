@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lathe-vision"
+version = "0.1.0"
+description = "LatheOS visual-grounding worker — NVIDIA LocateAnything-3B over a loopback HTTP API"
+readme = "README.md"
+requires-python = ">=3.11"
+# Only the LIGHT, hermetic deps live here so modules/vision-grounding.nix can
+# build the package from nixpkgs without a PyPI fetch. The HEAVY ML stack
+# (torch+CUDA, transformers==4.57.1, opencv) is intentionally listed as an
+# optional extra and imported lazily in lathe_vision.worker — the package stays
+# import-safe (and the systemd unit exits cleanly) when there is no GPU.
+dependencies = [
+    "pillow>=10.0",         # image decode (base64/path -> RGB)
+    "numpy>=1.25",          # array glue for the worker
+]
+
+[project.optional-dependencies]
+# `pip install .[gpu]` pulls the NVIDIA-recommended inference stack. torch must
+# be installed separately for your CUDA version (see pytorch.org). Versions
+# follow the LocateAnything-3B model card exactly.
+#   pip install opencv-python-headless==4.11.0.86 transformers==4.57.1 \
+#       numpy==1.25.0 Pillow==11.1.0 peft torchvision decord==0.6.0 lmdb==1.7.5
+gpu = [
+    "transformers==4.57.1",
+    "opencv-python-headless==4.11.0.86",
+    "torchvision",
+    "peft",
+    "decord==0.6.0",
+    "lmdb==1.7.5",
+    "accelerate",
+    "safetensors",
+]
+
+[project.scripts]
+# Entrypoint wired by modules/vision-grounding.nix as `lathe-vision`.
+lathe-vision = "lathe_vision.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["lathe_vision*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

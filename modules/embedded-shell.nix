@@ -101,5 +101,9 @@ in
     LATHEOS_LLM_URL=http://127.0.0.1:11434
     LATHEOS_VOICE_MODEL=llama3.2:3b
     LATHEOS_PROJECT_ROOT=/assets/projects
+    # Local visual-grounding server (OPT-IN; see modules/vision-grounding.nix).
+    # lathe_shell/vision.py defaults to this and degrades gracefully when the
+    # vision feature is disabled / has no GPU.
+    LATHEOS_VISION_URL=http://127.0.0.1:11435
   '';
 }

@@ -1,249 +1,70 @@
 # LatheOS + CAM — end-to-end setup guide
 
-This is the *zero-to-working* runbook for the full stack. If you follow every
-step top-to-bottom you will end with:
+This is the *zero-to-working* runbook for the full stack. LatheOS is
+**privacy-first and fully local**: the entire CAM assistant runs 100%
+on-device on a portable USB OS. No microphone audio, transcript, or prompt
+ever leaves the machine — there is **no cloud component** to set up, no
+accounts to create, and no token to provision.
 
-- a CAM Cloud Proxy serving WebSockets on your own domain,
-- a DynamoDB row for your first hardware token,
+If you follow every step top-to-bottom you will end with:
+
 - a LatheOS installer ISO flashed to a USB,
-- a machine that says "Hey CAM → docker compose up -d" and actually runs it.
+- a machine that boots straight into a monochrome Sway desktop, and
+- a fully-local voice loop: say the wake word, it transcribes on-device with
+  whisper.cpp, answers with a local Ollama model, and speaks back through
+  Piper — all offline, even with networking unplugged.
 
-The stack is intentionally split across two repositories:
+Everything lives in a single repository:
 
 | Repository | Purpose | Runs on |
 |---|---|---|
-| [`haminxx/CAM-LatheOS-Agent-`](https://github.com/haminxx/CAM-LatheOS-Agent-) | Cloud proxy, auth, vendor routing, infra-as-code | AWS (EC2 + ALB) |
-| [`haminxx/LatheOS`](https://github.com/haminxx/LatheOS) | Declarative OS, Sway UI, local daemon, installer | Your NVMe |
+| [`haminxx/LatheOS`](https://github.com/haminxx/LatheOS) | Declarative OS, Sway UI, local voice daemon, installer | Your USB / NVMe |
 
-They are wired together by **one** thing: a 32-char hardware token in
-`/persist/secrets/cam.env` on the target drive. Everything else flows from
-that.
+There is nothing to wire to an external service. The assistant is self-contained.
 
 ---
 
 ## 0. What you need before you touch any code
 
-Accounts you will open (all have free tiers big enough to test):
+You do **not** need any cloud accounts, API keys, or a domain. The default
+stack is entirely offline.
 
-| Service | Why | How to sign up |
+Optional accounts (only if you want the matching optional feature):
+
+| Service | Why | When you'd want it |
 |---|---|---|
-| **AWS** | Hosts the cloud proxy, DynamoDB, ACM, Route53 | <https://aws.amazon.com/> (new accounts get $100 credit) |
-| **Deepgram** | Streaming speech-to-text | <https://console.deepgram.com/> (200 hours free) |
-| **Groq** *or* **xAI** | LLM (pick one; Groq is faster, xAI reasons deeper) | <https://console.groq.com/> / <https://console.x.ai/> |
-| **Cartesia** | Streaming text-to-speech (CAM's voice) | <https://play.cartesia.ai/> |
-| **Picovoice** | Wake word "Hey CAM" on-device | <https://console.picovoice.ai/> (free for personal) |
-| **A domain name** | Needed for a TLS cert | Namecheap / Cloudflare / Route53 registrar |
-| **GitHub** | Holds the repos, runs CI, publishes ISO | already done |
+| **Picovoice** | Alternative "Porcupine" wake backend | Only if you prefer Porcupine over the default openWakeWord. <https://console.picovoice.ai/> (free for personal) |
+| **Cursor** | `latheos-cursor-agent` programmatic coding | Only if you use the optional Cursor SDK CLI. <https://cursor.com/dashboard/integrations> |
+
+Hardware / media you actually need:
+
+- A USB stick — **≥ 32 GB** to boot, **≥ 64 GB** recommended once voice +
+  heavy models are baked in, **≥ 128 GB** if you want a large coder model
+  plus headroom for projects.
+- A target machine with a microphone and speaker (and, optionally, a webcam
+  for the camera-vision features).
+- A GPU with ~24 GB VRAM is **only** required for the opt-in MisoTTS premium
+  voice and the opt-in LocateAnything-3B vision grounding; everything else
+  runs on CPU.
 
 Tools on your laptop (install once):
 
 ```
-aws CLI v2      # https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
-terraform >= 1.6
-docker
-python 3.12+
 git
+# Plus, only if you build the ISO/USB image yourself:
+nix >= 2.18   # on Linux or WSL2 (Windows cannot format ext4 + exFAT loopbacks natively)
 ```
 
-On Windows, the PowerShell versions of `aws` and `terraform` work fine; you
-do **not** need WSL for any of these. WSL is only needed if you want to run
-`nix build` locally instead of relying on CI artifacts.
+If you just download a prebuilt ISO from CI, you need nothing but a USB
+flasher (Rufus / balenaEtcher / `dd`).
 
 ---
 
-## 1. Point a domain at AWS (one-time, ~10 min)
-
-You need a public hostname — e.g. `cam.latheos.dev` — so the LatheOS daemon
-can open `wss://cam.latheos.dev/ws/cam` with a valid certificate.
-
-```bash
-aws route53 create-hosted-zone \
-    --name "latheos.dev" \
-    --caller-reference "$(date +%s)"
-```
-
-Copy the four nameservers the command prints and set them at your domain
-registrar. DNS propagation takes 1–30 min.
-
-Then request an ACM certificate **in the same region** you'll deploy the
-proxy into (start with `us-east-1` unless you have a reason otherwise):
-
-```bash
-aws acm request-certificate \
-    --domain-name "cam.latheos.dev" \
-    --validation-method DNS \
-    --region us-east-1
-```
-
-The console (or `aws acm describe-certificate`) will give you a CNAME to add
-to Route53 to prove you own the domain. The cert issues automatically in
-~2 min once that record exists. **Save the certificate ARN** — you'll pass it
-into Terraform.
-
----
-
-## 2. Create the state bucket (Terraform's brain) — 2 min
-
-Terraform needs a place to store the `tfstate` file so it remembers what
-it deployed. We do this with a tiny, self-contained bootstrap.
-
-```bash
-git clone https://github.com/haminxx/CAM-LatheOS-Agent-.git cam
-cd cam
-cd infra/terraform/bootstrap
-terraform init
-terraform apply \
-    -var "bucket=cam-tfstate-$(aws sts get-caller-identity --query Account --output text)"
-```
-
-That creates an S3 bucket + DynamoDB lock table. Write down the bucket name;
-you will *never* hand-edit anything inside it.
-
----
-
-## 3. Deploy the cloud proxy infrastructure — 10 min
-
-You need a VPC with at least two public and two private subnets across
-different AZs. If you already have one, skip to the terraform step. If you
-don't, the fastest path is the AWS VPC wizard:
-
-```
-AWS Console → VPC → Create VPC → "VPC and more"
-  Name: cam
-  IPv4 CIDR: 10.20.0.0/16
-  AZs: 2
-  Public subnets: 2
-  Private subnets: 2
-  NAT gateways: 1 per AZ   ← pick this
-  VPC endpoints: none      ← fine for now
-```
-
-Click Create; it finishes in ~3 min. Grab the VPC id and the two public /
-two private subnet ids from the resource map.
-
-Now apply the proxy stack:
-
-```bash
-cd ../            # back to infra/terraform
-cp terraform.tfvars.example terraform.tfvars   # (or create by hand — see below)
-terraform init -backend-config="bucket=cam-tfstate-<your-account-id>"
-terraform plan
-terraform apply
-```
-
-`terraform.tfvars` contents — fill these with values from steps 1 and the VPC
-wizard:
-
-```hcl
-aws_region         = "us-east-1"
-environment        = "prod"
-vpc_id             = "vpc-0123456789abcdef0"
-public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
-private_subnet_ids = ["subnet-ccc", "subnet-ddd"]
-
-# From step 1:
-dns_zone_id         = "Z0123456789ABCDEFG"
-dns_name            = "cam.latheos.dev"
-acm_certificate_arn = "arn:aws:acm:us-east-1:<acct>:certificate/<uuid>"
-
-# From step 4 (can be a placeholder for the very first apply — Terraform
-# won't launch containers until this resolves):
-image_uri = "<acct>.dkr.ecr.us-east-1.amazonaws.com/cam-proxy:bootstrap"
-```
-
-After a clean apply you should see:
-
-```
-Outputs:
-  public_hostname = "cam.latheos.dev"
-  alb_dns_name    = "cam-proxy-prod-...elb.amazonaws.com"
-```
-
-The ALB is alive but the EC2 instances won't come healthy until we push an
-image in the next step.
-
----
-
-## 4. Build and push the container image — 5 min
-
-Log your local Docker into ECR (the repo was created by Terraform):
-
-```bash
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin \
-      "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com"
-
-cd ../..            # back to CAM_Cloud_Proxy repo root
-make docker         # -> cam-proxy:dev
-docker tag cam-proxy:dev "<acct>.dkr.ecr.us-east-1.amazonaws.com/cam-proxy:latest"
-docker push          "<acct>.dkr.ecr.us-east-1.amazonaws.com/cam-proxy:latest"
-```
-
-After this, `terraform apply` once more with `image_uri` set to the real tag.
-The ASG's instance refresh will roll the new image within a few minutes.
-
-**After first deploy**, CI (`.github/workflows/ci.yml`) will build and push
-every new `main` commit for you via OIDC. Set repo variable
-`AWS_ROLE_TO_ASSUME` to the ARN of `cam-gha-ecr-push` (created by
-`infra/terraform/ecr.tf`).
-
----
-
-## 5. Populate vendor secrets in SSM — 2 min
-
-The app reads its keys out of SSM Parameter Store at boot. Write each one
-once as a `SecureString`:
-
-```bash
-aws ssm put-parameter --name "/cam/prod/deepgram_api_key" \
-    --value "<paste>" --type SecureString --overwrite
-aws ssm put-parameter --name "/cam/prod/groq_api_key"     \
-    --value "<paste>" --type SecureString --overwrite
-aws ssm put-parameter --name "/cam/prod/cartesia_api_key" \
-    --value "<paste>" --type SecureString --overwrite
-aws ssm put-parameter --name "/cam/prod/cartesia_voice_id" \
-    --value "<paste>" --type String       --overwrite
-
-# Optional — only if you picked xAI over Groq:
-aws ssm put-parameter --name "/cam/prod/xai_api_key" \
-    --value "<paste>" --type SecureString --overwrite
-```
-
-The EC2 user-data script pulls these into `/etc/cam/env` on boot; no app
-restart needed beyond a single SSM SendCommand if you rotate a key later.
-
----
-
-## 6. Provision your first hardware token — 30 seconds
-
-```bash
-cd CAM_Cloud_Proxy
-make tokens-init                                           # idempotent
-make tokens-provision USER=hamin TIER=standard QUOTA=600   # prints the token
-# -> 8f3a2e1c9b7d4a5e6f0c2b8d1a3e4f67
-```
-
-That 32-char string is the *only* thing that links a physical drive to your
-AWS account. Copy it into a note; you'll paste it into the installer in
-step 9.
-
-Sanity-check the proxy is answering:
-
-```bash
-curl -s https://cam.latheos.dev/healthz
-# -> {"status":"ok","version":"0.1.0"}
-```
-
-If you get a cert error, DNS hasn't propagated yet — wait 5 min and retry.
-
----
-
-## 7. Grab the LatheOS installer ISO — 2 min (or 20 if you build locally)
+## 1. Get the LatheOS installer ISO — 2 min (or 20 if you build locally)
 
 **The easy path — download the CI-built ISO.** Every green push to `main`
-on `haminxx/LatheOS` publishes a 1.3 GB ISO as a workflow artifact. Tag
-pushes (`v*`) publish it as a permanent GitHub Release. To grab the most
-recent:
+on `haminxx/LatheOS` publishes the ISO as a workflow artifact. Tag pushes
+(`v*`) publish it as a permanent GitHub Release. To grab the most recent:
 
 1. Open <https://github.com/haminxx/LatheOS/actions/workflows/nix.yml>
 2. Click the top green run.
@@ -256,12 +77,35 @@ recent:
 git clone https://github.com/haminxx/LatheOS.git
 cd LatheOS
 ./scripts/build-latheos-iso.sh
-# -> result-latheos-iso/iso/latheos-*.iso  (~1.3 GB)
+# -> result-latheos-iso/iso/latheos-*.iso
 ```
 
 ---
 
-## 8. Flash the ISO to a USB — 2 min
+## 2. (Optional) Bake the offline models before first boot
+
+The USB works with no network on first boot **if** the model weights are
+already on the exFAT `/assets` partition. The prefetch script downloads them
+on a machine that has internet, and `scripts/build-usb-image.sh` seeds them:
+
+```bash
+# Default bake: Ollama voice + heavy + Piper + Whisper + openWakeWord weights
+./scripts/prefetch-models.sh
+
+# Add the opt-in premium voice (MisoTTS 8B, GPU-only, ~30-40 GB download):
+WITH_MISO=1 ./scripts/prefetch-models.sh
+
+# Add the opt-in vision grounding (LocateAnything-3B, GPU-only, ~8 GB):
+WITH_VISION=1 ./scripts/prefetch-models.sh
+```
+
+You can also skip this entirely and pull models after first boot with
+`ollama pull` (see §6). Weights live on exFAT `/assets`, so they survive
+`nixos-rebuild` and can be managed from Windows/macOS too.
+
+---
+
+## 3. Flash the ISO to a USB — 2 min
 
 - **Linux**: `./scripts/flash-usb.sh path/to/latheos-*.iso /dev/sdX`
   (the script refuses to write to a mounted disk and uses `pv` for progress)
@@ -274,7 +118,7 @@ Verify by booting once: the USB should drop you at a TTY with the message
 
 ---
 
-## 9. Install LatheOS onto the target machine — 10 min
+## 4. Install LatheOS onto the target machine — 10 min
 
 Boot the target from the USB, log in as `nixos` (no password), and run:
 
@@ -282,137 +126,200 @@ Boot the target from the USB, log in as `nixos` (no password), and run:
 sudo /etc/latheos/install.sh
 ```
 
-It asks three questions:
+It asks **two** questions:
 
 1. **Target disk** — `/dev/nvme0n1` on most modern laptops. *This wipes it.*
 2. **Hostname** — anything; `lathe-01` is fine.
-3. **Hardware token** — paste the 32-char string from step 6.
 
-The installer then:
+There is no hardware token step. The installer then:
 
-- Partitions the NVMe: 513 MiB ESP, 90% ext4 (LABEL `latheos`), remainder
+- Partitions the NVMe: 513 MiB ESP, ~90% ext4 (LABEL `latheos`), remainder
   exFAT (LABEL `LATHE_ASSETS` — this partition is cross-platform so you can
-  plug the drive into macOS/Windows to move big files).
-- Writes `/persist/secrets/cam.env` containing your token (mode 0600).
+  plug the drive into macOS/Windows to move big files and models).
 - Clones the LatheOS flake into `/etc/nixos/latheos`.
 - Runs `nixos-install --flake .#latheos-x86_64`.
 
 Reboot, remove the USB, and LatheOS comes up on tty1 with Sway.
 
+> Prefer to keep everything on the stick? You can also run LatheOS directly
+> off the USB (Mode A) or in a VM window on your host (Mode B) without
+> touching an internal disk — see
+> [`docs/LATHEOS_VIBE_PLATFORM.md`](docs/LATHEOS_VIBE_PLATFORM.md).
+
 ---
 
-## 10. First-boot verification — 3 min
+## 5. First-boot verification — 3 min
 
-On the freshly booted LatheOS host:
+Everything below runs offline. You can literally unplug the network cable
+and the full voice loop still works.
 
 ```bash
 # 1. Daemon is up and idle:
 systemctl status cam-daemon
 # -> Active: active (running); journal: {"event":"daemon.idle", ...}
 
-# 2. Control socket responds:
+# 2. The local LLM is serving — Ollama on loopback with your models pulled:
+ollama list
+# -> you should see your voice + heavy models (e.g. llama3.2:3b, a coder model)
+
+# 3. Control socket responds:
 camctl ping
 # -> {"ok": true, "pong": true}
 
-# 3. Fire a synthetic activation — bypasses the mic, exercises the WS
-#    roundtrip end-to-end:
-camctl activate --kind wake_word
-# tail the log:
+# 4. Fully-local round trip. Say the wake word (openWakeWord default), OR
+#    press F5 in the `lathe` shell for push-to-talk, then speak a short
+#    request. Tail the log while you do it:
 journalctl -fu cam-daemon
-# expect: wake.fired → cloud.connected → transcript.final (if you speak)
-
-# 4. Real mic test:
-#    say "Hey CAM, list my files"
-# expect: wake.fired kind=wake_word → server sends a command frame that the
-#         executor runs (you'll see `ls` output in the journal).
+# expect, all on-device: wake.fired → stt.final ("...your words...") →
+#         agents respond via local Ollama → tts spoken back through Piper.
+#         Each turn is also appended to /run/cam-daemon/events.jsonl and
+#         mirrored into the `lathe` chat strip.
 ```
 
-If step 3 logs `cloud.error: unknown hardware token` you pasted wrong — DynamoDB
-is case-sensitive. Re-run `make tokens-list` on the CAM side, verify, and put
-the exact value into `/persist/secrets/cam.env` on the lathe machine.
+If nothing transcribes, confirm the mic is the default PipeWire source and
+that whisper + the wake model were baked or pulled. No network is involved at
+any step — there is nothing remote to misconfigure.
+
+### Pulling and switching models (no rebuild)
+
+Models are user-swappable at runtime. Pull anything you like with Ollama,
+then point a role at it:
+
+```bash
+# See what's pulled and which model each role currently uses:
+lathe models list
+
+# Pull a new model and assign it to a role (voice | heavy | vision):
+ollama pull qwen2.5-coder:14b
+lathe models set heavy qwen2.5-coder:14b
+
+# Inspect a single role:
+lathe models get voice
+
+# Camera vision model:
+ollama pull llama3.2-vision
+lathe models set vision llama3.2-vision
+```
+
+`lathe models set` persists to `/persist/secrets/llm.env` (env keys
+`LATHEOS_VOICE_MODEL`, `LATHEOS_HEAVY_MODEL`, `LATHEOS_VLM_MODEL`) with **no
+rebuild**. Run `systemctl restart cam-daemon` to apply a new voice/heavy
+model to the live voice loop.
+
+### Optional: `latheos-cursor-agent` (Cursor TypeScript SDK)
+
+The installed system includes **`latheos-cursor-agent`**, a CLI over Cursor's
+`@cursor/sdk`. It does **not** replace the offline Ollama/CAM stack; it adds
+programmatic coding against a repo when you have a
+[Cursor API key](https://cursor.com/dashboard/integrations). Example:
+
+```bash
+export CURSOR_API_KEY="…"   # store via the age vault in production; see docs/LATHEOS_VIBE_PLATFORM.md §4.3.1
+latheos-cursor-agent models
+latheos-cursor-agent once "List top-level items in this flake" --cwd /etc/nixos/latheos
+```
 
 ---
 
-## Pipeline at a glance
+## 6. Optional features
+
+### 6.1 Premium voice — MisoTTS (GPU-only)
+
+Piper is the CPU default everywhere. If you have a ~24 GB-VRAM GPU and want a
+richer, emotive English voice, enable **MisoTTS 8B**
+([source](https://github.com/MisoLabsAI/MisoTTS)). It serves on loopback
+`127.0.0.1:11436`, is English-only, and watermarks its output.
+
+```nix
+# configuration.nix
+latheos.tts.miso.enable = true;
+```
+
+```bash
+WITH_MISO=1 ./scripts/prefetch-models.sh   # bake the weights onto /assets
+```
+
+A boot-time `cam-tts-autoselect` promotes `miso` only when it's enabled, the
+weights are present, and a ≥~24 GB GPU is detected — otherwise it stays on
+Piper. Full setup and constraints are in
+[`docs/VOICE_TTS.md`](docs/VOICE_TTS.md).
+
+### 6.2 Camera vision
+
+The daemon can see through a local webcam (capture via ffmpeg/v4l2 to a
+tmpfile that never leaves the machine):
+
+- **"What do you see / describe this"** routes to a vision-capable Ollama
+  model you pull yourself: `ollama pull llama3.2-vision`, selectable via
+  `lathe models set vision …` (`LATHEOS_VLM_MODEL`).
+- **"Where is X / find the button"** routes to the opt-in
+  **LocateAnything-3B** grounding service (NVIDIA non-commercial license,
+  GPU-only). See [`docs/VISION_GROUNDING.md`](docs/VISION_GROUNDING.md).
+
+### 6.3 Alternative wake backend — Porcupine
+
+openWakeWord is the default and needs no key. If you'd rather use Picovoice
+Porcupine, pass `--wake-backend porcupine` to the installer and provide a
+Picovoice key; otherwise you never need one.
+
+---
+
+## Pipeline at a glance (all on-device)
 
 ```
      Microphone (PipeWire, 16 kHz mono)
             │
             ▼
-┌───────────────────────┐
-│  LatheOS cam-daemon   │     [systemd hardened unit]
-│  ┌─────────────────┐  │
-│  │ Activator       │  │  ← Porcupine wake-word + aubio onset
-│  └────┬────────────┘  │
-│       │ Activation              ← "Hey CAM" / clap / camctl
-│       ▼
-│  ┌─────────────────┐  │
-│  │ WS client       │◄─┼──── audio frames (binary)
-│  └────┬────────────┘  │
-└───────┼───────────────┘
-        │ wss://cam.latheos.dev/ws/cam
-        ▼
-┌──────────────────────────────────┐
-│  AWS ALB  →  EC2 ASG             │  [WAF rate-limits /ws/cam]
-│  ┌────────────────────────────┐  │
-│  │ CAM Cloud Proxy (FastAPI)  │  │
-│  │                            │  │
-│  │  1. verify HW token  ──────┼──┼──► DynamoDB
-│  │  2. stream PCM       ──────┼──┼──► Deepgram STT
-│  │  3. Transcript       ──────┼──┼──► Groq / xAI LLM
-│  │  4. LLM output:            │  │
-│  │       text    ──── TTS ────┼──┼──► Cartesia (binary audio down)
-│  │       JSON command  ───────┼──┼──► back to daemon's executor
-│  └────────────────────────────┘  │
-└──────────────────────────────────┘
-        ▲
-        │ binary audio + text frames
-        │
-┌───────┼───────────────────┐
-│  Speaker (PipeWire)       │
-│  Executor (allowlisted)   │  ← `docker compose up`, `sway exec`,
-│                           │    `cursor .`, `git push`, etc.
-└───────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  LatheOS cam-daemon   [systemd hardened unit] │
+│                                               │
+│  Activator  ── openWakeWord / clap / F5 PTT   │
+│      │ activation                             │
+│      ▼                                        │
+│  stt.py     ── energy-VAD capture             │
+│      │                                        │
+│      ▼                                        │
+│  stt.py     ── whisper.cpp speech-to-text     │
+│      │ transcript                             │
+│      ▼                                        │
+│  agents.py  ── local Ollama multi-agent pool  │
+│      │        (Dispatcher → Planner / Coder / │
+│      │         Critic → Speaker)              │
+│      ├──► tts.py ── Piper (or MisoTTS) ──► Speaker
+│      ├──► executor.py ── optional allowlisted command
+│      │                   (OFF unless LATHEOS_VOICE_EXEC=1)
+│      └──► bus.py ── event bus (/run/cam-daemon/events.jsonl)
+└─────────────────────────────────────────────┘
 ```
+
+Nothing in this diagram reaches the network. The model weights live on the
+exFAT `/assets` partition; the binaries are built by Nix and pinned with the
+flake.
 
 ## Day-two ops
 
 | Task | Command |
 |---|---|
-| Rotate a vendor key | `aws ssm put-parameter --name ... --value ... --overwrite` → restart proxy (`aws ssm send-command ... 'systemctl restart cam-proxy'`) |
-| Issue a token for a new drive | `make tokens-provision USER=... TIER=... QUOTA=...` |
-| Revoke a lost drive | `python -m app.admin.tokens revoke <token>` |
-| Inspect token usage | `python -m app.admin.tokens show <token>` |
-| Roll the ASG to a new image | bump `image_uri` tag in tfvars → `terraform apply` |
+| List / switch models | `lathe models list` · `lathe models set <role> <model>` |
+| Pull a new model | `ollama pull <model>` then `lathe models set <role> <model>` |
+| Apply a new voice/heavy model to the live loop | `systemctl restart cam-daemon` |
 | Update the OS on a drive | `sudo nixos-rebuild switch --flake github:haminxx/LatheOS#latheos-x86_64` |
-| Tail proxy logs | `aws logs tail /ec2/cam-proxy-prod --follow` |
 | Tail daemon logs | `journalctl -fu cam-daemon` |
-
-## Cost sanity check (us-east-1, prod defaults)
-
-| Resource | Monthly |
-|---|---|
-| 2× c7g.large EC2 (24/7) | ~$50 |
-| ALB (24/7 + traffic) | ~$18 |
-| NAT gateway (1) | ~$32 |
-| DynamoDB (pay-per-request, tokens only) | < $1 |
-| Route53 hosted zone | $0.50 |
-| WAF | ~$5 |
-| **Total** | **~$110** |
-
-Vendor costs (Deepgram/Groq/Cartesia) scale with use; at 1 hour/day of
-conversation, expect ~$20/month combined. Put a billing alarm at $150 and
-sleep well.
+| Watch voice turns | `tail -f /run/cam-daemon/events.jsonl` |
 
 ## Troubleshooting
 
-- **`cloud.error: unknown hardware token`** → token mismatch. See step 10.
-- **`wake.fired` never appears** → `PICOVOICE_ACCESS_KEY` not set in
-  `/persist/secrets/cam.env`; without it the daemon falls back to
-  control-socket-only mode (`camctl activate` still works).
-- **ALB 503** → EC2 instances not healthy. `aws elbv2 describe-target-health`
-  to see why; usually image pull failed (check ECR permissions on the IAM
-  role, or a typo in `image_uri`).
+- **`wake.fired` never appears** → with the default openWakeWord backend,
+  confirm the ONNX wake model is on `/assets` and the mic is the default
+  PipeWire source. (If you opted into Porcupine, a missing Picovoice key
+  drops the daemon to control-socket-only mode — `camctl activate` and F5
+  push-to-talk still work.)
+- **Nothing transcribes** → check the whisper model was baked/pulled and the
+  capture device is correct; everything is local, so there's no remote
+  endpoint to blame.
+- **No spoken reply** → Piper voice file missing on `/assets`, or (if you
+  enabled it) MisoTTS lacks a big-enough GPU and the autoselect correctly fell
+  back to Piper. See [`docs/VOICE_TTS.md`](docs/VOICE_TTS.md).
 - **CI red on LatheOS** → the `flake / per-config eval` job isolates each
   config; the failing step name tells you exactly which one broke. Stderr
   spills into the run's public Summary tab via `scripts/ci-eval.sh`.

@@ -27,6 +27,7 @@ _ALLOWED_BASH_PREFIXES = (
     "pytest",
     "python ",
     "uv ",
+    "latheos-cursor-agent ",
 )
 
 

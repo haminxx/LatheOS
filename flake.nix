@@ -63,6 +63,13 @@
       packages.x86_64-linux = {
         latheos-iso = self.nixosConfigurations.latheos-iso.config.system.build.isoImage;
         default     = self.nixosConfigurations.latheos-iso.config.system.build.isoImage;
+        latheos-cursor-agent =
+          nixpkgs.legacyPackages.x86_64-linux.callPackage ./pkgs/latheos-cursor-agent.nix { };
+      };
+
+      packages.aarch64-linux = {
+        latheos-cursor-agent =
+          nixpkgs.legacyPackages.aarch64-linux.callPackage ./pkgs/latheos-cursor-agent.nix { };
       };
     };
 }

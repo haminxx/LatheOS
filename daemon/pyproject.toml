@@ -4,16 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cam-daemon"
-version = "0.1.0"
-description = "Local LatheOS wake-word + WebSocket bridge to CAM Cloud Proxy"
+version = "0.2.0"
+description = "LatheOS on-device voice assistant: wake -> whisper.cpp -> Ollama -> Piper/MisoTTS (fully local, no cloud)"
 readme = "../README.md"
 requires-python = ">=3.11"
 # Core runtime deps — everything below is required. The wake-word engine
 # is intentionally NOT listed here; see [project.optional-dependencies].
 # This keeps cam-daemon fully functional in "clap + PTT" mode with zero
 # third-party wake engines, and lets the Nix module opt into a backend.
+# whisper.cpp (STT) and piper (TTS) are external binaries put on PATH by the
+# Nix module, not Python deps.
 dependencies = [
-    "websockets>=13.1",
     "sounddevice>=0.5.1",
     "numpy>=1.26",
     "aubio>=0.4.9",

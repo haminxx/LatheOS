@@ -105,9 +105,30 @@ class _OpenWakeWordBackend:
 
     def __init__(self, threshold: float = 0.5, keyword: str = "hey_jarvis") -> None:
         # Passing inference_framework="onnx" keeps us off of TensorFlow.
-        self._model = _OWWModel(inference_framework="onnx", wakeword_models=None)
+        #
+        # Prefer the wake models baked onto the exFAT partition by
+        # scripts/prefetch-models.sh (LATHEOS_OWW_MODELS_DIR) so first boot is
+        # fully offline and never phones home to fetch weights. If the dir is
+        # absent we let openWakeWord fall back to its bundled defaults.
+        kwargs: dict = {"inference_framework": "onnx"}
+        models = self._discover_models(os.environ.get("LATHEOS_OWW_MODELS_DIR"))
+        if models:
+            kwargs["wakeword_models"] = models
+        self._model = _OWWModel(**kwargs)
         self._threshold = threshold
         self._keyword = keyword
+
+    @staticmethod
+    def _discover_models(models_dir: str | None) -> list[str]:
+        """Return wake-word ONNX paths in `models_dir` (skip feature models)."""
+        if not models_dir or not os.path.isdir(models_dir):
+            return []
+        skip = ("melspectrogram", "embedding")
+        found = []
+        for fn in sorted(os.listdir(models_dir)):
+            if fn.endswith(".onnx") and not any(s in fn for s in skip):
+                found.append(os.path.join(models_dir, fn))
+        return found
 
     def process(self, frame: np.ndarray) -> float | None:
         scores = self._model.predict(frame)

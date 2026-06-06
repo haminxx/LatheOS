@@ -6,7 +6,7 @@ This is the small tool a Windows user runs **before they have LatheOS**. It:
 2. Asks which USB stick to use (with safety rails — refuses to touch the system disk, refuses disks outside 32 GB–2 TB).
 3. Flashes the image.
 4. Copies the host-side launchers onto the stick.
-5. Writes a first-run profile (language, timezone, optional Picovoice key).
+5. Writes a first-run profile (language, timezone, wake backend, and — only if you pick the optional Porcupine backend — a Picovoice key).
 
 After it finishes, the user can either **reboot to the stick** (Mode A) or **double-click the launcher** inside the stick to run it in a window (Mode B).
 
@@ -21,9 +21,9 @@ Open PowerShell **as Administrator** in this folder, then:
 # Korean UI + voice
 .\Install-LatheOS.ps1 -Language ko
 
-# If your Picovoice approval is through, include the key up-front so the
-# wake word works on first boot:
-.\Install-LatheOS.ps1 -Language ko -PicovoiceKey 'YOUR_32_CHAR_KEY'
+# The default wake backend is openWakeWord and needs no key. Only if you
+# choose the optional Porcupine backend, pass a Picovoice key up-front:
+.\Install-LatheOS.ps1 -Language ko -WakeBackend porcupine -PicovoiceKey 'YOUR_32_CHAR_KEY'
 ```
 
 ## What gets written where

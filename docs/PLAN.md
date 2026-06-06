@@ -11,8 +11,9 @@ stick. Plug it in, pick it in your boot menu, and you land on a monochrome
 Sway desktop whose flagship app is `lathe` — a Jarvis-style ASCII HUD that
 shows your machine's real components (brand, model, condition), streams
 commentary from a local LLM, and lets you run code and shell commands in
-the same window. All AI runs on the stick; the cloud proxy is an optional
-"bigger brain" upgrade, not a dependency.
+the same window. **All AI runs on the stick** — wake word, speech-to-text,
+the LLM, and text-to-speech are 100% on-device. Nothing leaves the machine;
+there is no cloud component and no network dependency.
 
 ## 2. Architecture at a glance
 
@@ -28,8 +29,8 @@ flowchart TB
     Sway["Sway WM (monochrome)"]
     Foot["Foot terminal"]
     Greeter["cam-greeter (Piper TTS)"]
-    Lathe["lathe (embedded shell)"]
-    CamD["cam-daemon (wake + WS)"]
+    Lathe["lathe (embedded shell + F5 PTT)"]
+    CamD["cam-daemon (wake → STT → Ollama → TTS)"]
   end
 
   subgraph VM["Mode B — run in a VM on host"]
@@ -38,22 +39,23 @@ flowchart TB
     QLin["Linux: launch-latheos.sh + KVM"]
   end
 
-  subgraph AI["On-device AI (127.0.0.1 only)"]
-    Ollama["Ollama — llama3.2:3b voice + heavy coder"]
+  subgraph AI["On-device AI (127.0.0.1 only — nothing leaves the machine)"]
+    Ollama["Ollama — voice + heavy coder + optional vision model"]
     Whisper["whisper.cpp — STT"]
-    Piper["piper-tts — TTS"]
+    Piper["piper-tts — default TTS"]
+    Miso["MisoTTS 8B — opt-in premium voice (GPU)"]
     OWW["openWakeWord (Apache-2.0, default)"]
   end
-
-  Cloud["CAM Cloud Proxy — OPTIONAL bigger brain (AWS)"]
 
   USB --> BOOT
   USB --> VM
   BOOT --> AI
-  CamD -.opt-in.-> Cloud
   Lathe --> Ollama
   CamD --> OWW
   CamD --> Whisper
+  CamD --> Ollama
+  CamD --> Piper
+  CamD -.opt-in.-> Miso
   Greeter --> Piper
   Greeter --> Ollama
 ```
@@ -96,8 +98,14 @@ component plate swaps for an exploded-schematic ASCII block.
 | Sway monochrome + $mod+o bind | ✅ built | `modules/sway.nix` |
 | PipeWire low-latency audio | ✅ built | `modules/audio.nix` |
 | Storage layout (ESP/ext4/exFAT) | ✅ built | `modules/storage.nix` |
-| cam-daemon (wake + WS + exec) | ✅ built | `daemon/cam_daemon/` |
-| Wake-word multi-backend | ✅ built | `wake.py` supports oww / porcupine / clap / PTT |
+| cam-daemon (wake → STT → Ollama → TTS + exec) | ✅ built | `daemon/cam_daemon/` |
+| Local STT (energy-VAD + whisper.cpp) | ✅ built | `daemon/cam_daemon/stt.py` |
+| Tiered TTS (Piper default, MisoTTS opt-in) | ✅ built | `daemon/cam_daemon/tts.py`, `modules/tts.nix`, `platform/tts-worker/` |
+| Voice event bus (turns → jsonl) | ✅ built | `daemon/cam_daemon/bus.py` |
+| Camera vision (describe + grounding routing) | ✅ built | `daemon/cam_daemon/camera.py` + `vision.py`, `modules/camera.nix` |
+| User-swappable models CLI | ✅ built | `lathe models` → `lathe_shell/models.py` |
+| Voice mirror + F5 PTT in `lathe` | ✅ built | `lathe_shell/voicebus.py` |
+| Wake-word multi-backend | ✅ built | `wake.py` supports oww (default) / porcupine (opt-in) / clap / PTT |
 | **Embedded shell (`lathe`)** | ✅ **newly built** | `platform/embedded-shell/` full Textual app |
 | **ASCII hardware HUD** | ✅ **newly built** | `lathe_shell/hud.py` + `components_pane.py` |
 | **ASCII-3D component plates** | ✅ **newly built** | `lathe_shell/ascii_art.py` (compact + detailed) |
@@ -160,36 +168,32 @@ flowchart LR
 
 ## 7. What you (human) still need to decide / obtain
 
-See `§8 — Blockers beyond Picovoice` below.
+See `§8 — Build prerequisites` below.
 
-## 8. Blockers beyond Picovoice
+## 8. Build prerequisites
 
-**None of these block the first bootable USB build.** They're quality-of-life upgrades.
+**None of these block the first bootable USB build.** They're quality-of-life
+items; the assistant itself is fully local and needs no external services.
 
 1. **A Linux builder** (native or WSL2, with Nix ≥ 2.18 + root).
    The `build-usb-image.sh` script uses `mkfs.ext4` + `mkfs.exfat` +
    `losetup` — Windows cannot do those natively. Options:
    - Install WSL2 Ubuntu, run `make release`.
    - Trust the CI pipeline — tag a `v*`, wait for the release.
-   - Spin up an Ubuntu VM/EC2 once just for the build (then shut it down).
+   - Spin up an Ubuntu VM once just for the build (then shut it down).
 
-2. **A domain + AWS account** — **only if you want the cloud upgrade**.
-   Local-first mode needs neither. If you ever want `CAM_PROXY_URL` set to
-   a real hostname for bigger models, then you need the `SETUP.md` §1-§4
-   steps (Route53 + ACM + Terraform + ECR push).
-
-3. **An Ollama host with enough disk** for the prefetch step:
+2. **An Ollama host with enough disk** for the prefetch step:
    - Voice model (`llama3.2:3b`) ~2 GB
    - Small heavy (`llama3.1:8b`) ~5 GB
    - Big heavy (`codestral:22b`) ~13 GB
    - Total bake: ~7 GB default, ~22 GB with `HEAVY=big`.
 
-4. **USB stick sizing**:
+3. **USB stick sizing**:
    - ≥ 32 GB to boot at all
    - ≥ 64 GB for voice + small heavy prebaked
    - ≥ 128 GB if you want codestral prebaked + headroom for projects
 
-5. **Model licence sanity check**. Redistributing model weights inside a
+4. **Model licence sanity check**. Redistributing model weights inside a
    GitHub Release zip is allowed for llama.cpp/Piper/Whisper bundles, but
    the **Ollama model blobs are large (~GB)** and pulling them via the
    prefetch step during CI is fine. Shipping them inside a public release
@@ -198,17 +202,12 @@ See `§8 — Blockers beyond Picovoice` below.
    action needed — flagged only so you understand why we keep the
    per-model pull separate instead of one giant tar.
 
-6. **openWakeWord wake phrase**. The Apache-2.0 pretrained bundle only
+5. **openWakeWord wake phrase**. The Apache-2.0 pretrained bundle only
    ships "hey_jarvis", "alexa", and a few others — not "hey cam". If you
    want the literal phrase "hey cam", we need to train a custom 50 KB
    ONNX model (takes ~30 min with their training notebook). Until then
    the default wake phrase is **"hey jarvis"**, which arguably matches
    the product aesthetic better anyway.
-
-7. **CAM_Cloud_Proxy repo** (sibling project): untouched by this change
-   set. The pipeline above assumes local-first. If you later want the
-   cloud path, the CAM side still needs the Terraform apply in the
-   `CAM_Cloud_Proxy/` directory and a hardware token in DynamoDB.
 
 ## 9. How to try `lathe` without a full NixOS build
 

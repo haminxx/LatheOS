@@ -14,6 +14,7 @@ from textual.widgets import Input, RichLog
 
 from .hardware import HardwareInventory
 from .llm import LocalLLM
+from .voicebus import VoiceBusReader
 
 
 _SYSTEM_PROMPT = """You are CAM, the on-device assistant for LatheOS.
@@ -45,6 +46,7 @@ class ChatPane(Vertical):
         super().__init__(id="chat")
         self._llm = llm
         self._inv = inv
+        self._voicebus = VoiceBusReader()
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="chat-log", highlight=True, markup=True, wrap=True)
@@ -53,7 +55,23 @@ class ChatPane(Vertical):
     def on_mount(self) -> None:
         self.border_title = "CAM · voice model"
         log = self.query_one("#chat-log", RichLog)
-        log.write("[dim]CAM is ready. Type a question and press Enter.[/]")
+        log.write("[dim]CAM is ready. Type a question and press Enter, or press F5 to talk.[/]")
+        # Mirror spoken voice turns from cam-daemon into this strip. Polling a
+        # tiny append-only file is cheaper and more robust than a socket here,
+        # and it no-ops cleanly when the daemon isn't running.
+        self.set_interval(1.0, self._drain_voice)
+
+    def _drain_voice(self) -> None:
+        log = self.query_one("#chat-log", RichLog)
+        for event in self._voicebus.poll():
+            etype = event.get("type")
+            text = (event.get("text") or "").strip()
+            if not text:
+                continue
+            if etype == "user":
+                log.write(f"[dim](voice)[/] [b]you>[/b] {text}")
+            elif etype == "cam":
+                log.write(f"[dim](voice)[/] [b]CAM>[/b] {text}")
 
     def _hardware_brief(self) -> str:
         lines = ["HARDWARE:"]

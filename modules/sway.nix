@@ -115,6 +115,14 @@ let
     # opens a session exactly as it would for "Hey CAM".
     bindsym $mod+space exec camctl activate --kind wake_word
 
+    # Screen Pilot — local, on-device "Clicky". Prompts for a goal via wofi,
+    # then walks you through the on-screen steps (cursor move + floating card +
+    # narration). Requires latheos.screenPilot.enable; degrades to a spoken/
+    # text description when vision/uinput/eww are unavailable. The wofi launch
+    # makes the keybind a no-op-safe nicety: cancel the prompt and nothing runs.
+    # `lathe-pilot guide` is only on PATH when the feature is enabled.
+    bindsym $mod+g exec sh -c 'g=$(echo "" | wofi --dmenu --prompt "Screen Pilot — what do you want to do?" --style /etc/latheos/wofi.css) && [ -n "$g" ] && exec foot -T "LatheOS Shell" lathe-pilot guide "$g"'
+
     # Workspaces 1–9.
     bindsym $mod+1 workspace number 1
     bindsym $mod+2 workspace number 2
@@ -150,8 +158,11 @@ let
 
 in {
   # Cursor is proprietary; accept that on x86_64 hosts only.
+  # latheos-cursor-agent bundles @cursor/sdk (proprietary) on all arches we build.
   nixpkgs.config.allowUnfreePredicate = pkg:
-    isX86 && builtins.elem (lib.getName pkg) [ "cursor" "code-cursor" ];
+    let n = lib.getName pkg; in
+    (isX86 && builtins.elem n [ "cursor" "code-cursor" ])
+    || builtins.elem n [ "latheos-cursor-agent" ];
 
   programs.sway = {
     enable = true;

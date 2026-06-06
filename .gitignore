@@ -3,6 +3,13 @@ result
 result-*
 .direnv/
 
+# Build artifacts / baked models / disk images (large; never commit)
+dist/
+*.img
+*.img.*
+*.qcow2
+*.iso
+
 # Python
 __pycache__/
 *.py[cod]
@@ -12,6 +19,10 @@ __pycache__/
 # Tooling
 .pytest_cache/
 .ruff_cache/
+
+# Node (cursor-programmatic)
+platform/cursor-programmatic/node_modules/
+platform/cursor-programmatic/dist/
 
 # Secrets — NEVER commit
 persist/

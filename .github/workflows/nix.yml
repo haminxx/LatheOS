@@ -1,12 +1,13 @@
 ################################################################################
-# LatheOS CI — three concerns, three jobs.
+# LatheOS CI — four concerns, four jobs.
 #
-#   daemon-lint   Python side of the house (ruff + compile).
-#   flake-check   Evaluate every nixosConfiguration *independently* so a red
-#                 run points at the exact system that broke. Cheap; no builds.
-#   build-iso     On pushes to main, actually build the installer ISO and
-#                 publish it as a downloadable workflow artifact. This is the
-#                 proof that "plug-and-play OS" isn't just a slogan.
+#   cursor-programmatic  Node: npm ci + vitest + tsc (platform/cursor-programmatic).
+#   daemon-lint            Python side of the house (ruff + compile).
+#   flake-check            Evaluate every nixosConfiguration *independently* so a red
+#                          run points at the exact system that broke. Cheap; no builds.
+#   build-iso              On pushes to main, actually build the installer ISO and
+#                          publish it as a downloadable workflow artifact. This is the
+#                          proof that "plug-and-play OS" isn't just a slogan.
 ################################################################################
 
 name: nix
@@ -23,6 +24,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cursor-programmatic:
+    name: cursor-programmatic / npm ci + test + build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: platform/cursor-programmatic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: platform/cursor-programmatic/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
   daemon-lint:
     name: daemon / ruff + compileall
     runs-on: ubuntu-24.04
@@ -87,7 +105,7 @@ jobs:
 
   build-iso:
     name: iso / build + upload
-    needs: flake-check
+    needs: [cursor-programmatic, flake-check]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 90

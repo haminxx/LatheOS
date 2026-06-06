@@ -21,7 +21,6 @@ database that every Linux ships.
 from __future__ import annotations
 
 import json
-import os
 import platform
 import re
 import shutil

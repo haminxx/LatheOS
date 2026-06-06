@@ -52,7 +52,15 @@ def _parse_argv(argv: list[str]) -> argparse.Namespace:
 
 
 def main() -> int:
-    args = _parse_argv(sys.argv[1:])
+    argv = sys.argv[1:]
+
+    # `lathe models ...` is a plain CLI (no TUI) for listing / switching the
+    # active local Ollama models. Everything else launches the Textual shell.
+    if argv and argv[0] == "models":
+        from lathe_shell.models import main as models_main
+        return models_main(argv[1:])
+
+    args = _parse_argv(argv)
     app = LatheShellApp(
         color=args.color,
         detail=args.detail,

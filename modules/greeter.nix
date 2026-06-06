@@ -42,11 +42,15 @@ let
       # --- 0. Load environment (model names, endpoints, voice paths) -------
       # shellcheck disable=SC1091
       [ -r /etc/latheos/llm.env ] && . /etc/latheos/llm.env
+      [ -r /etc/latheos/tts.env ] && . /etc/latheos/tts.env || true
+      [ -r /run/latheos/tts-backend.env ] && . /run/latheos/tts-backend.env || true
       [ -r /persist/secrets/llm.env ] && . /persist/secrets/llm.env || true
 
       LLM_URL="''${LATHEOS_LLM_URL:-http://127.0.0.1:11434}"
       VOICE_MODEL="''${LATHEOS_VOICE_MODEL:-llama3.2:3b}"
       PIPER_VOICE="''${LATHEOS_PIPER_VOICE:-/assets/models/piper/en_US-amy-medium.onnx}"
+      TTS_BACKEND="''${LATHEOS_TTS_BACKEND:-auto}"
+      TTS_URL="''${LATHEOS_TTS_URL:-http://127.0.0.1:11436}"
 
       STATE_FILE="${sessionStatePath}"
       mkdir -p "$(dirname "$STATE_FILE")"
@@ -127,14 +131,25 @@ Last task: ''${LAST_TASK}. ''${TODO_COUNT} open items."
       notify-send -a "CAM" -u normal -t 15000 \
         "CAM — morning briefing" "$BRIEFING" || true
 
-      # --- 4. Speak it (only if the voice file is present) -----------------
-      if [ -r "$PIPER_VOICE" ]; then
-        WAV="$(mktemp --suffix=.wav)"
+      # --- 4. Speak it via the tiered TTS router ---------------------------
+      # MisoTTS (premium) only when the GPU autoselect promoted us to it AND the
+      # loopback service answers; otherwise fall back to Piper (CPU, default).
+      WAV="$(mktemp --suffix=.wav)"
+      SPOKEN=0
+      if [ "$TTS_BACKEND" = "miso" ]; then
+        REQ=$(jq -n --arg t "$BRIEFING" '{text:$t}')
+        if curl -fsS --max-time 60 "''${TTS_URL}/synthesize" \
+             -H 'content-type: application/json' -d "$REQ" -o "$WAV" 2>/dev/null \
+           && [ -s "$WAV" ]; then
+          aplay -q "$WAV" && SPOKEN=1 || true
+        fi
+      fi
+      if [ "$SPOKEN" != 1 ] && [ -r "$PIPER_VOICE" ]; then
         printf '%s' "$BRIEFING" \
           | piper --model "$PIPER_VOICE" --output_file "$WAV" >/dev/null 2>&1 || true
         [ -s "$WAV" ] && aplay -q "$WAV" || true
-        rm -f "$WAV"
       fi
+      rm -f "$WAV"
 
       # --- 5. Write back last_boot so next login knows when we were here ---
       TMP="$(mktemp)"
@@ -149,11 +164,11 @@ in
   # to read instead of a "nothing recorded" on every login.
   environment.etc."latheos/session.default.json".text = ''
     {
-      "last_task": "Welcome to LatheOS. Say 'Hey CAM' any time.",
+      "last_task": "Welcome to LatheOS. Everything runs locally — say 'Hey CAM' any time.",
       "todos": [
-        "Pair your Picovoice key (put it in /persist/secrets/cam.env)",
-        "Try: open the embedded shell from the menu",
-        "Try: ask CAM to check the system flake with 'nix flake check'"
+        "Try: open the embedded shell (Mod+o) and chat by typing",
+        "Try: say 'Hey CAM' then ask a question — fully offline",
+        "Pull any model you like with 'ollama pull <name>' and set it with 'lathe models'"
       ],
       "last_boot": null
     }

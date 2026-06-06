@@ -29,6 +29,11 @@ ZIP="${DIST_DIR}/latheos-usb.zip"
 ARCH="x86_64"
 SIZE="16G"     # total image size. User's real stick can be bigger — NixOS will resize /assets on first boot.
 
+# The encrypted root ships with this passphrase; modules/firstrun-wizard.nix
+# forces the user to change it on first boot. Override at build time with
+# INITIAL_LUKS_PASS=... if you want a different factory passphrase.
+INITIAL_LUKS_PASS="${INITIAL_LUKS_PASS:-latheos}"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
@@ -48,7 +53,7 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1" >&2; exit 1; };
 }
 [[ $EUID -eq 0 ]] || { echo "Re-run with sudo." >&2; exit 1; }
 
-for t in nix parted mkfs.fat mkfs.ext4 mkfs.exfat losetup sgdisk zip sha256sum; do need "$t"; done
+for t in nix parted mkfs.fat mkfs.ext4 mkfs.exfat losetup sgdisk zip sha256sum cryptsetup; do need "$t"; done
 
 mkdir -p "$DIST_DIR"
 rm -f "$IMG" "$ZIP"
@@ -65,11 +70,15 @@ log "system closure: ${SYSTEM_PATH}"
 # ---------------------------------------------------------------------------
 # 2. Allocate the raw image and partition it.
 #    Layout:
-#       p1  ESP  FAT32  1 GiB
-#       p2  root ext4   remainder - 2 GiB    (LABEL=latheos)
-#       p3  data exfat  2 GiB (placeholder)  (LABEL=LATHE_ASSETS)
+#       p1  ESP        FAT32       1 GiB                 (LABEL=ESP, unencrypted)
+#       p2  cryptroot  LUKS2+ext4  remainder - 2 GiB     (PARTLABEL=cryptroot;
+#                                  decrypted ext4 LABEL=latheos)
+#       p3  data       exfat       2 GiB (placeholder)   (LABEL=LATHE_ASSETS)
 #    The user's real stick will be bigger than 16 GiB; a first-boot
 #    growpart-style service will expand /assets to fill the stick.
+#
+#    p2 is LUKS-encrypted: the OS, /persist (secrets, vault key, documents) sit
+#    behind a boot passphrase. p1 (ESP) and p3 (shared exFAT) stay unencrypted.
 # ---------------------------------------------------------------------------
 log "allocating sparse image (${SIZE})..."
 truncate -s "${SIZE}" "$IMG"
@@ -79,30 +88,35 @@ parted -s "$IMG" \
   mklabel gpt \
   mkpart ESP fat32 1MiB 1025MiB \
   set 1 esp on \
-  mkpart root ext4  1025MiB  '-2049MiB' \
+  mkpart cryptroot  1025MiB  '-2049MiB' \
   mkpart data         '-2049MiB' '100%'
 
 # ---------------------------------------------------------------------------
-# 3. Map as loopback device and format each partition.
+# 3. Map as loopback device, LUKS-encrypt the root, and format each partition.
 # ---------------------------------------------------------------------------
 LOOP=$(losetup --show -fP "$IMG")
 log "loop device: ${LOOP}"
-trap 'losetup -d "${LOOP}" 2>/dev/null || true' EXIT
+CRYPT_NAME="latheos_crypt_build"
+trap 'cryptsetup close "${CRYPT_NAME}" 2>/dev/null || true; losetup -d "${LOOP}" 2>/dev/null || true' EXIT
+
+log "LUKS-formatting the root partition (factory passphrase; changed on first boot)..."
+printf '%s' "${INITIAL_LUKS_PASS}" | cryptsetup luksFormat --type luks2 --batch-mode "${LOOP}p2" -
+printf '%s' "${INITIAL_LUKS_PASS}" | cryptsetup open "${LOOP}p2" "${CRYPT_NAME}" -
 
 log "formatting partitions..."
 mkfs.fat  -F 32 -n ESP          "${LOOP}p1"
-mkfs.ext4 -F    -L latheos      "${LOOP}p2"
+mkfs.ext4 -F    -L latheos      "/dev/mapper/${CRYPT_NAME}"
 mkfs.exfat      -L LATHE_ASSETS "${LOOP}p3"
 
 # ---------------------------------------------------------------------------
-# 4. Mount and install NixOS into the ext4 partition.
+# 4. Mount and install NixOS into the decrypted ext4 partition.
 # ---------------------------------------------------------------------------
 MNT=$(mktemp -d)
-trap 'umount -R "${MNT}" 2>/dev/null || true; losetup -d "${LOOP}" 2>/dev/null || true; rmdir "${MNT}" 2>/dev/null || true' EXIT
+trap 'umount -R "${MNT}" 2>/dev/null || true; cryptsetup close "${CRYPT_NAME}" 2>/dev/null || true; losetup -d "${LOOP}" 2>/dev/null || true; rmdir "${MNT}" 2>/dev/null || true' EXIT
 
 log "mounting root..."
-mount "${LOOP}p2" "${MNT}"
-mkdir -p "${MNT}/boot" "${MNT}/assets" "${MNT}/persist/secrets" "${MNT}/persist/state"
+mount "/dev/mapper/${CRYPT_NAME}" "${MNT}"
+mkdir -p "${MNT}/boot" "${MNT}/assets" "${MNT}/persist/secrets" "${MNT}/persist/state" "${MNT}/persist/documents"
 mount "${LOOP}p1" "${MNT}/boot"
 mount "${LOOP}p3" "${MNT}/assets"
 
@@ -144,6 +158,25 @@ if [ -d "$PREFETCH" ]; then
   [ -d "${PREFETCH}/whisper" ]       && cp -r "${PREFETCH}/whisper/."       "${MNT}/assets/models/whisper/"
   [ -d "${PREFETCH}/openwakeword" ]  && cp -r "${PREFETCH}/openwakeword/."  "${MNT}/assets/models/openwakeword/"
 
+  # OPT-IN visual grounding model (NVIDIA LocateAnything-3B, ~8 GB, GPU-only,
+  # NON-COMMERCIAL). Only present if the user ran the prefetch with
+  # WITH_VISION=1. The OS feature stays off until latheos.vision.enable = true.
+  if [ -d "${PREFETCH}/locateanything" ]; then
+    log "staging vision model -> /assets/models/locateanything (non-commercial)"
+    mkdir -p "${MNT}/assets/models/locateanything"
+    cp -r "${PREFETCH}/locateanything/." "${MNT}/assets/models/locateanything/"
+  fi
+
+  # OPT-IN premium voice (MisoTTS 8B, ~30-40 GB, GPU-only, English-only,
+  # watermarked). Only present if the user ran the prefetch with WITH_MISO=1.
+  # The OS keeps using Piper until a capable GPU is detected AND
+  # latheos.tts.miso.enable = true.
+  if [ -d "${PREFETCH}/miso" ]; then
+    log "staging premium voice -> /assets/models/miso (MisoTTS, GPU-only)"
+    mkdir -p "${MNT}/assets/models/miso"
+    cp -r "${PREFETCH}/miso/." "${MNT}/assets/models/miso/"
+  fi
+
   # Marker file — modules/local-llm.nix sees this and skips the first-boot
   # pull entirely, which means offline users get full Jarvis out of the box.
   date -u +%FT%TZ > "${MNT}/assets/models/.prefetched"
@@ -158,6 +191,7 @@ fi
 log "unmounting..."
 sync
 umount -R "${MNT}"
+cryptsetup close "${CRYPT_NAME}"
 losetup -d "${LOOP}"
 trap - EXIT
 

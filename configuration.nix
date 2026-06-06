@@ -15,9 +15,16 @@
     ./modules/cam-daemon.nix
     ./modules/storage.nix
     ./modules/local-llm.nix       # Local Ollama + whisper + piper (offline-first AI).
+    ./modules/tts.nix             # Tiered TTS: Piper (default) + MisoTTS (opt-in GPU).
+    ./modules/camera.nix          # Local webcam capture + scene-description routing.
+    ./modules/vision-grounding.nix # OPT-IN NVIDIA LocateAnything-3B visual grounding (GPU-only).
+    ./modules/screen-pilot.nix    # OPT-IN local on-screen guidance ("Clicky", fully local).
     ./modules/embedded-shell.nix  # Scaffold for the in-OS Monaco + chat window.
     ./modules/greeter.nix         # CAM "Jarvis" login briefing (status + voice).
     ./modules/vault.nix           # Age-encrypted, cross-platform-visible secret vault.
+    ./modules/cursor-sdk-bridge.nix # Cursor @cursor/sdk CLI (latheos-cursor-agent).
+    ./modules/ai-providers.nix    # `lathe-ai` opt-in cloud router (cursor/claude/opencode/...).
+    ./modules/firstrun-wizard.nix # `lathe-setup` beginner first-boot wizard.
   ];
 
   # ---- identity ---------------------------------------------------------------
@@ -72,7 +79,9 @@
 
   networking.networkmanager.enable = true;
   networking.firewall.enable = true;
-  # Outbound WebSocket to CAM Cloud Proxy — no inbound ports opened.
+  # Fully local AI — all model servers (Ollama, vision, TTS) bind to loopback
+  # only. No inbound ports are opened and the assistant needs no outbound
+  # connection to function.
   networking.firewall.allowedTCPPorts = [ ];
 
   # ---- services ---------------------------------------------------------------

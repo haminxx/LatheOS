@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid
@@ -26,6 +28,7 @@ from .hud import HUDBar
 from .llm import LLMConfig, LocalLLM
 from .terminal_pane import TerminalPane
 from .theme import theme as make_theme
+from .voicebus import push_to_talk
 
 
 class LatheShellApp(App[None]):
@@ -52,6 +55,7 @@ class LatheShellApp(App[None]):
         Binding("f1", "help",           "help"),
         Binding("f2", "toggle_color",   "color"),
         Binding("f3", "toggle_detail",  "detail"),
+        Binding("f5", "push_to_talk",   "talk"),
         Binding("f10", "quit",          "quit"),
         Binding("ctrl+c", "quit",       "quit", show=False),
     ]
@@ -102,11 +106,29 @@ class LatheShellApp(App[None]):
         self.notify(f"detail: {'on' if self._detail else 'off'}")
         self.refresh(recompose=True)
 
+    async def action_push_to_talk(self) -> None:
+        """Trigger the daemon's local voice loop (whisper -> Ollama -> TTS).
+
+        Reuses cam-daemon via its control socket — the spoken turn shows up in
+        the chat strip through the event-bus tail. No-op (with a hint) when the
+        daemon isn't running, so the shell stays usable standalone.
+        """
+        ok = await asyncio.to_thread(push_to_talk)
+        if ok:
+            self.notify("listening… speak now", timeout=4)
+        else:
+            self.notify(
+                "voice daemon not reachable (cam-daemon). Type to chat instead.",
+                severity="warning",
+                timeout=5,
+            )
+
     def action_help(self) -> None:
         self.notify(
             "LatheOS shell\n"
             "  F2  toggle color palette\n"
             "  F3  toggle detailed component plates\n"
+            "  F5  push-to-talk (uses the local voice loop)\n"
             "  F10 quit\n"
             "Ask CAM in the right pane. Terminal runs one command at a time.",
             severity="information",

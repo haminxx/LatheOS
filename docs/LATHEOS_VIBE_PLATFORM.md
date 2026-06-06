@@ -74,14 +74,17 @@ Rationale you already identified: **if the OS breaks its own Wi-Fi, a cloud LLM 
 
 | Layer | Tool | Size-ish | Notes |
 |-------|------|---------|-------|
-| Wake word | **Picovoice / Porcupine** (already present) | < 10 MB | Works offline. |
-| STT (speech→text) | **whisper.cpp** (`base.en` → `small.en`) | 150–500 MB | CPU-capable, fast enough for short commands. |
-| LLM runtime | **Ollama** (localhost:11434, loopback only) | < 100 MB binary | Hosts both models below. |
-| **Voice / fast model** | **Llama 3.2 3B Instruct** (Meta, US) | ~2 GB q4 | Handles the live voice loop — quick, low-RAM, conversational. |
+| Wake word | **openWakeWord** (Apache-2.0) *default*; **Porcupine** *opt-in* | < 10 MB | Fully offline. openWakeWord needs no key; Porcupine only if you explicitly pick it. Clap + push-to-talk always available. |
+| Utterance capture | energy-VAD in `daemon/cam_daemon/stt.py` | — | Trims silence after the wake word, on-device. |
+| STT (speech→text) | **whisper.cpp** (`base.en` → `small.en`) via `stt.py` | 150–500 MB | CPU-capable, fast enough for short commands. |
+| LLM runtime | **Ollama** (localhost:11434, loopback only) | < 100 MB binary | Hosts the models below; user-swappable (see §4.1.4). |
+| **Voice / fast model** | **Llama 3.2 3B Instruct** (Meta, US) *default* | ~2 GB q4 | Handles the live voice loop — quick, low-RAM, conversational. |
 | **Heavy / code model** | **Codestral 22B** (Mistral, France) *default*; **Llama 3.1 8B Instruct** (Meta) *low-RAM fallback* | ~13 GB / ~5 GB q4 | Background worker: code edits, nix-patch suggestions, multi-file reasoning. |
-| TTS (text→speech) | **Piper** (offline) | 20–100 MB | Replaces Cartesia in offline mode. |
+| TTS (text→speech) | **Piper** (offline) *default everywhere*; **MisoTTS 8B** *opt-in, GPU-only* | Piper 20–100 MB / Miso ~30–40 GB | Tiered — `daemon/cam_daemon/tts.py` routes to Piper by default and to MisoTTS only when enabled + a ~24 GB GPU is present. See [`VOICE_TTS.md`](VOICE_TTS.md). |
+| Camera vision *(describe)* | vision-capable **Ollama** model you pull (`ollama pull llama3.2-vision`) | model-dependent | "what do you see / describe" → `LATHEOS_VLM_MODEL`. Frames captured locally via ffmpeg/v4l2 (`daemon/cam_daemon/camera.py` + `vision.py`). |
+| Visual grounding *(opt-in)* | **NVIDIA LocateAnything-3B** | ~8 GB BF16 | "where is X / find the button" → boxes/points. **GPU-only, Linux, non-commercial license.** Loopback HTTP server (`127.0.0.1:11435`), **not** Ollama. Off by default — see [`VISION_GROUNDING.md`](VISION_GROUNDING.md). |
 
-**Origin policy:** Chinese-origin models (DeepSeek, Qwen, Yi, etc.) are excluded by product rule. Defaults above are Meta (US) and Mistral (France). Users can override via `/persist/secrets/llm.env` at their own discretion.
+**Origin policy:** Chinese-origin models (DeepSeek, Qwen, Yi, etc.) are excluded by product rule for the **default** text stack. The opt-in vision model embeds a Qwen2.5-3B decoder; it is **disabled by default** and only used by users who explicitly enable `latheos.vision.enable` and accept its NVIDIA non-commercial terms (see [`docs/VISION_GROUNDING.md`](VISION_GROUNDING.md)). Text-stack defaults remain Meta (US) and Mistral (France); users can override via `/persist/secrets/llm.env` at their own discretion.
 
 ### 4.1.1 Auto-selected heavy model (RAM-aware)
 
@@ -114,15 +117,82 @@ Primary `en`, secondary `ko`. The greeter + daemon read `LATHEOS_LANG` and switc
 
 Defaults shipped: `en_US-amy-medium.onnx` (English) and `ko_KR-kss-medium.onnx` (Korean).
 
+### 4.1.4 User-swappable models (no rebuild)
+
+Models are not baked into the flake — they are pulled with Ollama and selected
+at runtime, so you can switch the brain behind any role without a
+`nixos-rebuild`. The `lathe` shell exposes a `models` subcommand:
+
+```bash
+lathe models list                 # pulled Ollama models + the active model per role
+lathe models get <role>           # role = voice | heavy | vision
+lathe models set <role> <model>   # point a role at a pulled model
+lathe models pull <model>         # convenience wrapper over `ollama pull`
+```
+
+Typical flow: `ollama pull <anything>`, then `lathe models set <role> <model>`.
+Selections persist to `/persist/secrets/llm.env` (env keys
+`LATHEOS_VOICE_MODEL`, `LATHEOS_HEAVY_MODEL`, `LATHEOS_VLM_MODEL`). Run
+`systemctl restart cam-daemon` to apply a new voice/heavy model to the live
+voice loop. Because `/persist` survives `nixos-rebuild` and weights live on the
+exFAT `/assets` partition, your model choices follow the stick.
+
+### 4.1.5 Tiered text-to-speech
+
+TTS is tiered and routed by `daemon/cam_daemon/tts.py`:
+
+- **Piper** is the CPU default on every machine — small, fast, offline.
+- **MisoTTS 8B** ([source](https://github.com/MisoLabsAI/MisoTTS)) is an
+  **opt-in, GPU-only** (~24 GB VRAM), **English-only**, **watermarked**
+  premium voice served on loopback `127.0.0.1:11436` by
+  `platform/tts-worker/`. A boot-time `cam-tts-autoselect` promotes it
+  (`LATHEOS_TTS_BACKEND=miso`) only when `latheos.tts.miso.enable = true;`,
+  the weights are present, and a ≥~24 GB GPU is detected; otherwise it stays
+  on Piper. Bake weights with `WITH_MISO=1 scripts/prefetch-models.sh`.
+
+Full setup, constraints, and the HTTP contract live in
+[`docs/VOICE_TTS.md`](VOICE_TTS.md) — not duplicated here.
+
 ### 4.2 Where they live on disk
 
 - **Binaries**: built through Nix, part of the root FS — versioned with the flake.
 - **Weights**: **NOT** in the Nix store (too big, changes too often). Stored on the **exFAT** partition under `LATHE_ASSETS/models/`. The daemon reads them through a config path.
 - **Cache**: `/persist/cache/llm/` for k/v cache, prompts, tokenizers.
 
-### 4.3 Cloud becomes optional
+### 4.3 No cloud — everything is on-device
 
-The existing **CAM Cloud Proxy** doesn’t go away — it becomes an **upgrade path** when the user explicitly turns it on (bigger models, streaming STT/TTS). Offline stays the default.
+There is **no cloud component**. The microphone audio, the transcript, the
+prompt, and the generated speech never leave the machine. The former CAM Cloud
+Proxy and the daemon's WebSocket client have been removed entirely; the wake
+word, STT, the LLM, and TTS all run locally on the USB. If the OS breaks its
+own networking, the assistant can still hear you, reason, and reply — that is
+the whole point of a fully-local design.
+
+### 4.3.1 Programmatic Cursor agent (`latheos-cursor-agent`)
+
+The default image also ships **`latheos-cursor-agent`**, a thin CLI over Cursor’s TypeScript SDK (`@cursor/sdk`). The SDK is proprietary; the Nix package is tagged `unfree` and is allow-listed in [`modules/sway.nix`](../modules/sway.nix) next to the optional Cursor IDE. It uses the **same agent harness** as the Cursor IDE (indexing, tools, optional `.cursor/` MCP, skills, hooks) when you point it at a repo on disk, or **Cursor Cloud Agents** when you pass a cloud config.
+
+This is **optional at runtime**: without a key, the binary is inert except to print an error asking for `CURSOR_API_KEY`. Offline voice and repair still use **Ollama** (§4.1). SDK runs are billed like other Cursor usage; see [Cursor SDK docs](https://cursor.com/docs/api/sdk/typescript).
+
+| Command | Purpose |
+|---------|--------|
+| `latheos-cursor-agent models` | List models available to your API key (`--jsonl` for machine output). |
+| `latheos-cursor-agent once "prompt"` | One-shot `Agent.prompt` (create → run → dispose). |
+| `latheos-cursor-agent run "prompt"` | `Agent.create` + stream; `--jsonl` emits one JSON object per stream event. |
+
+**Environment (typical):**
+
+- `CURSOR_API_KEY` — from [Cursor Dashboard → Integrations](https://cursor.com/dashboard/integrations); store in the **age vault** ([`modules/vault.nix`](../modules/vault.nix)) and `source` it into your session, not world-readable `/etc`.
+- `CURSOR_RUNTIME` — `local` (default) or `cloud`.
+- `CURSOR_MODEL_ID` — defaults to `composer-2`; use `models` to discover others.
+- `CURSOR_LOCAL_CWD` — workspace for **local** runs; defaults to `LATHEOS_PROJECT_ROOT` then `PWD` (see also `/etc/latheos/cursor-programmatic.env` and [`modules/cursor-sdk-bridge.nix`](../modules/cursor-sdk-bridge.nix)).
+- `CURSOR_CLOUD_CONFIG` — path to a JSON file with Cursor `cloud` options (`repos`, `autoCreatePR`, etc.), as in the [Cursor SDK announcement](https://cursor.com/blog/typescript-sdk).
+
+**Nix:** `nix build .#latheos-cursor-agent` (per-system package in [`flake.nix`](../flake.nix)). If `npmDepsHash` drifts after a lockfile change, refresh it with:
+
+`nix run nixpkgs/nixos-24.11#prefetch-npm-deps -- platform/cursor-programmatic/package-lock.json`
+
+…and update [`pkgs/latheos-cursor-agent.nix`](../pkgs/latheos-cursor-agent.nix).
 
 ---
 
@@ -184,17 +254,17 @@ Safety rules (non-negotiable):
 
 ## 6. Embedded coding surface (inside LatheOS)
 
-We do **not** try to embed Cursor. We build a minimal integrated shell that the voice agent and menu can drop the user into:
+We do **not** ship the Cursor IDE GUI by default. The stick **does** include **`latheos-cursor-agent`** (§4.3.1): the same Cursor **agent runtime** and tools for programmatic use when `CURSOR_API_KEY` is set. For a full IDE, optional **code-server** or **Cursor** in Sway is a heavier path later.
 
 - **Window**: one Sway-managed GTK/WebKit window.
 - **Editor**: Monaco (or CodeMirror 6) — file tree, tabs, LSP.
 - **Terminal tab**: xterm.js attached to a login shell.
-- **Chat strip**: always-on side panel connected to the local LLM; voice output piped through Piper.
+- **Chat strip**: always-on side panel connected to the local LLM. It also
+  mirrors spoken voice turns (tailing the daemon event bus via
+  `lathe_shell/voicebus.py`), and **F5** triggers push-to-talk that reuses the
+  daemon's local loop over its control socket. Voice output goes through Piper
+  (or MisoTTS when enabled). Text chat stays crash-proof when the daemon is down.
 - **Diff view**: used every time repair is proposed.
-
-Heavier option later: optional **code-server** or **Cursor** in Sway as a second surface; not the default.
-
----
 
 ## 7. Build & ship pipeline (adjusted)
 
@@ -202,7 +272,7 @@ Heavier option later: optional **code-server** or **Cursor** in Sway as a second
 2. A second command bundles the image into a **ZIP** with the **host-side launchers** (Win / Mac / Linux) and a README, so an end user literally:
    - Flashes the raw image onto a USB stick (balenaEtcher / Rufus / `dd`), **or**
    - Copies the ZIP contents onto the exFAT partition of an already-provisioned stick and runs `launcher-<os>` to VM-boot.
-3. First boot on a real machine (or VM) runs a one-shot setup: user password, model download prompt, optional cloud token.
+3. First boot on a real machine (or VM) runs a one-shot setup: user password and a model download prompt. There is no token or cloud step — the assistant is fully local.
 
 ---
 
@@ -217,17 +287,17 @@ Heavier option later: optional **code-server** or **Cursor** in Sway as a second
 | Primary interaction | **Voice** (local wake word → local STT → local LLM → local TTS). Text chat always available. |
 | Models | Two: **Llama 3.2 3B** (voice) + **Codestral 22B** (heavy); **Llama 3.1 8B** as low-RAM override. |
 | Model origin policy | **No Chinese-origin models** in defaults. |
-| Cloud proxy | **Optional toggle** via `CAM_PROXY_URL`. Blank by default = fully offline. |
+| Cloud | **None.** Fully local, on-device only — no proxy, no token, no network dependency. |
 | `/assets` sizing | ext4 root pinned at **32 GiB**; the rest of the USB is exFAT `/assets`. |
 | VM disk strategy (Mode B) | **Raw USB passthrough** (same bytes as Mode A) so state is continuous across modes. |
 | Login briefing | **`cam-greeter`** user unit speaks a short status + last-task briefing on each login. |
-| Wake word | **Picovoice Porcupine** — user pastes the key into `/persist/secrets/cam.env` when approved. |
+| Wake word | **openWakeWord** (Apache-2.0) by default — no key needed. Porcupine is an optional alternative backend; clap + push-to-talk are always available. |
 | Licensing | QEMU (GPLv2) bundled is OK; model weights pulled by the user, not redistributed by us. |
 
 ## 9. Remaining open questions for the next iteration
 
 1. **Hardware target for first real boot** — is there a specific Windows laptop / PC I should assume (CPU, RAM, GPU)? That tells me whether 22B is realistic or if we should default to 8B.
-2. **Wake word choice** — keep Picovoice / Porcupine (proprietary, free personal tier) or swap to an open alternative (OpenWakeWord, snowboy-community)? Today the daemon still assumes Porcupine.
+2. **Wake word phrase** — the default backend is **openWakeWord** (Apache-2.0, no key); its pretrained bundle ships "hey jarvis" / "alexa" etc., not "hey cam". Train a custom ONNX for the literal "hey cam", or keep "hey jarvis"? Porcupine remains available as an opt-in alternative.
 3. **`/assets` size guidance** — how big should the exFAT partition be by default? Model weights + user projects will share it.
 4. **VM disk strategy** — give QEMU the **raw USB** (`\\.\PhysicalDrive`N, same bytes as Mode A — safest for state continuity) or an **image file** on the exFAT partition (easier to snapshot, but diverges from Mode A)?
 5. **UI language / accent for Piper** — default is `en_US-amy-medium`; if you want something else I'll swap the default path.
@@ -264,8 +334,14 @@ Locally (Linux / WSL2): `make release`.
 
 - Partitions + `/assets`: `modules/storage.nix`
 - Desktop / menu: `modules/sway.nix`
-- Voice + WS + executor: `daemon/cam_daemon/`, `modules/cam-daemon.nix` *(env updated — cloud proxy now opt-in)*
+- Local voice loop (wake → STT → Ollama → TTS) + executor: `daemon/cam_daemon/`, `modules/cam-daemon.nix` *(fully local — no cloud client; `ws_client.py` removed)*
+- **STT:** `daemon/cam_daemon/stt.py` *(energy-VAD utterance capture + whisper.cpp)*
+- **Tiered TTS:** `daemon/cam_daemon/tts.py` + `modules/tts.nix` + `platform/tts-worker/` *(Piper default; MisoTTS opt-in, GPU-only, loopback 127.0.0.1:11436; see `docs/VOICE_TTS.md`)*
+- **Camera vision:** `daemon/cam_daemon/camera.py` + `vision.py` + `modules/camera.nix` *(describe → Ollama VLM; locate → opt-in LocateAnything-3B)*
+- **Voice event bus:** `daemon/cam_daemon/bus.py` *(turns → `/run/cam-daemon/events.jsonl`, mirrored into `lathe`)*
+- **User-swappable models:** `lathe models` → `platform/embedded-shell/lathe_shell/models.py` *(persists to `/persist/secrets/llm.env`, no rebuild)*
 - **Local AI runtime:** `modules/local-llm.nix` *(new — Ollama + whisper + piper + first-boot model pull)*
+- **Visual grounding (opt-in):** `modules/vision-grounding.nix` + `platform/vision-worker/` *(new — NVIDIA LocateAnything-3B on 127.0.0.1:11435, GPU-only, non-commercial; client at `platform/embedded-shell/lathe_shell/vision.py`; see `docs/VISION_GROUNDING.md`)*
 - **Embedded shell scaffold:** `modules/embedded-shell.nix` *(new — WebKitGTK runtime deps, `lathe` CLI stub, desktop entry)*
 - **Login briefing:** `modules/greeter.nix` *(reads `/persist/state/session.json`, speaks via Piper, en + ko prompts)*
 - **Multi-agent pool:** `daemon/cam_daemon/agents.py` *(Dispatcher → parallel Workers → Speaker on local Ollama)*

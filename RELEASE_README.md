@@ -21,7 +21,8 @@ Welcome. This archive turns any decent USB stick into a **portable vibe coding w
 All three installers support:
 
 - `-Language en` / `--language en` (default) or `ko`
-- `-PicovoiceKey …` / `--picovoice-key …` (optional; enables wake-word on first boot)
+- `--wake-backend openwakeword` (default, no key) or `porcupine`
+- `-PicovoiceKey …` / `--picovoice-key …` (**only** needed if you choose the optional Porcupine backend; openWakeWord works with no key)
 
 ## What happens after the installer finishes
 
@@ -30,7 +31,7 @@ You get a USB with three partitions:
 | Partition | Visible from host OS? | What's there |
 |---|---|---|
 | `ESP` (FAT32) | Yes | Bootloader. |
-| `latheos` (ext4) | **Linux only** | NixOS + `/persist/secrets` (vault key, Picovoice key). |
+| `latheos` (ext4) | **Linux only** | NixOS + `/persist/secrets` (vault key, model selection in `llm.env`, optional Porcupine key). |
 | `LATHE_ASSETS` (exFAT) | **Yes, all OSes** | Your projects + models + encrypted vault + host launchers. |
 
 Two ways to use it:
@@ -91,7 +92,7 @@ That path is reachable from Windows / macOS / Linux as a normal exFAT folder, **
 
 ## Troubleshooting quick links
 
-- The voice never triggers → Picovoice key is missing. Paste into `/persist/secrets/cam.env`.
+- The voice never triggers → with the default openWakeWord backend, confirm the wake ONNX model is on `/assets` and the mic is the default PipeWire source. (If you chose the optional Porcupine backend, a missing key drops to push-to-talk only.)
 - Mode B is slow → use Mode A instead, or check that hardware virtualization is on in your BIOS.
 - Model didn't pull → plug in, connect to Wi-Fi, then `systemctl start latheos-llm-bootstrap`.
 - Forgot the vault password / lost the stick's ext4 key → secrets are unrecoverable by design. That's the point.
