@@ -22,7 +22,12 @@
     ./modules/embedded-shell.nix  # Scaffold for the in-OS Monaco + chat window.
     ./modules/greeter.nix         # CAM "Jarvis" login briefing (status + voice).
     ./modules/vault.nix           # Age-encrypted, cross-platform-visible secret vault.
-    ./modules/cursor-sdk-bridge.nix # Cursor @cursor/sdk CLI (latheos-cursor-agent).
+    # NOTE: cursor-sdk-bridge.nix (which bakes the @cursor/sdk npm agent into the
+    # image) is intentionally NOT imported. That npm package is the optional CLOUD
+    # booster, not part of the local-first stack, and baking it bloats the image
+    # and pins a fragile npm dependency. `lathe-ai` (below) still routes to the
+    # Cursor agent if the user installs it later — see modules/ai-providers.nix.
+    # ./modules/cursor-sdk-bridge.nix
     ./modules/ai-providers.nix    # `lathe-ai` opt-in cloud router (cursor/claude/opencode/...).
     ./modules/firstrun-wizard.nix # `lathe-setup` beginner first-boot wizard.
   ];

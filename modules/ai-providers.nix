@@ -5,7 +5,8 @@
 # "heavy coding" escape hatch the user picked: one command, `lathe-ai`, that
 # routes a coding prompt to a chosen cloud agent provider:
 #
-#   * cursor   (default) -> latheos-cursor-agent (modules/cursor-sdk-bridge.nix)
+#   * cursor   (default) -> latheos-cursor-agent IF installed on PATH (not baked
+#                           into the image; install the @cursor/sdk CLI to use it)
 #   * claude             -> the Anthropic `claude` CLI, if installed on PATH
 #   * opencode           -> the `opencode` CLI, if installed on PATH
 #   * <custom>           -> any command named in LATHEOS_AI_PROVIDER_CMD
@@ -25,11 +26,13 @@
 { config, pkgs, lib, ... }:
 
 let
-  cursorAgent = pkgs.callPackage ../pkgs/latheos-cursor-agent.nix { };
-
+  # We deliberately do NOT build/bundle the @cursor/sdk npm agent into the image
+  # (it's the optional cloud booster, not local-first, and pins a fragile npm
+  # dependency). lathe-ai routes to `latheos-cursor-agent` from PATH *if the user
+  # installs it later* — exactly like it already does for claude/opencode.
   latheAi = pkgs.writeShellApplication {
     name = "lathe-ai";
-    runtimeInputs = [ pkgs.coreutils cursorAgent ];
+    runtimeInputs = [ pkgs.coreutils ];
     text = ''
       set -euo pipefail
 
@@ -78,6 +81,10 @@ let
 
       case "$PROVIDER" in
         cursor)
+          if ! command -v latheos-cursor-agent >/dev/null 2>&1; then
+            hint "the Cursor agent isn't installed on this drive yet. Install it later, or use --provider claude/opencode."
+            exit 1
+          fi
           if [ -z "''${CURSOR_API_KEY:-}" ]; then
             hint "CURSOR_API_KEY not set. Run: vault set CURSOR_API_KEY (then: vault mark-auto CURSOR_API_KEY)"
             exit 1
