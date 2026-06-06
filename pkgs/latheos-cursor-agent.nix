@@ -14,7 +14,7 @@
 
   src = ../platform/cursor-programmatic;
 
-  npmDepsHash = "sha256-QfYs5PxADDk1fyq5OComCculsenVYSeNClHcmshpkRc=";
+  npmDepsHash = "sha256-3g4AqcWkGpngSsQRi7fUkgGBONtNixCjh1KbFCER3cA=";
 
   npmInstallFlags = [ "--include=dev" ];
 
