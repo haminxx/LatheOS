@@ -38,7 +38,13 @@
   # directly affect wake-to-WS latency.
   boot.kernelPackages = pkgs.linuxPackages_latest;
   boot.loader.systemd-boot.enable = true;
-  boot.loader.efi.canTouchEfiVariables = true;
+  # This is a PORTABLE, removable drive meant to boot on many different machines.
+  # It must NOT rewrite each host's EFI/NVRAM boot entries, so we don't touch EFI
+  # variables. systemd-boot still installs the removable fallback loader at
+  # EFI/BOOT/BOOTX64.EFI, which UEFI firmware boots automatically — and this also
+  # lets nixos-install lay down the bootloader from a non-NixOS / BIOS-booted
+  # build host (e.g. the VM you build the image in).
+  boot.loader.efi.canTouchEfiVariables = false;
 
   # NVMe + virtio drivers are always available in the initrd so the same image
   # boots bare-metal *and* inside a Type-2 hypervisor (QEMU, Parallels, UTM).

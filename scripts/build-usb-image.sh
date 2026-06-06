@@ -126,7 +126,22 @@ mount "${LOOP}p1" "${MNT}/boot"
 mount "${LOOP}p3" "${MNT}/assets"
 
 log "nixos-install (this populates /nix/store on the image)..."
-nixos-install \
+# nixos-install ships in the `nixos-install-tools` package. On a NixOS host it
+# is already on PATH; on a plain Linux + Nix build box (the usual case) it is
+# NOT, so fetch it from the SAME pinned nixpkgs this flake uses — reproducible,
+# and it reuses the already-downloaded 24.11 nixpkgs (no extra channel). Falls
+# back to the flake registry's nixpkgs if that attribute path is unavailable.
+if command -v nixos-install >/dev/null 2>&1; then
+  NIXOS_INSTALL=nixos-install
+else
+  log "nixos-install not on PATH (non-NixOS host); fetching nixos-install-tools..."
+  TOOLS_PATH="$(nix build --no-link --print-out-paths \
+      "${REPO_ROOT}#nixosConfigurations.latheos-${ARCH}.pkgs.nixos-install-tools" 2>/dev/null \
+      || nix build --no-link --print-out-paths "nixpkgs#nixos-install-tools")"
+  NIXOS_INSTALL="${TOOLS_PATH}/bin/nixos-install"
+fi
+
+"${NIXOS_INSTALL}" \
   --root "${MNT}" \
   --system "${SYSTEM_PATH}" \
   --no-root-password \
