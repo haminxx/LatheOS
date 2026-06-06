@@ -84,12 +84,17 @@ log "allocating sparse image (${SIZE})..."
 truncate -s "${SIZE}" "$IMG"
 
 log "partitioning..."
-parted -s "$IMG" \
+# NB: the `--` is REQUIRED. The cryptroot/data partitions use negative,
+# from-the-end offsets ("-2049MiB" = 2049 MiB before the disk end). Without
+# `--`, parted parses that leading dash as option flags (-2 -0 -4 ...) and
+# aborts with "invalid option". `--` stops option parsing so the values are
+# read as partition positions.
+parted -s "$IMG" -- \
   mklabel gpt \
   mkpart ESP fat32 1MiB 1025MiB \
   set 1 esp on \
-  mkpart cryptroot  1025MiB  '-2049MiB' \
-  mkpart data         '-2049MiB' '100%'
+  mkpart cryptroot 1025MiB -2049MiB \
+  mkpart data      -2049MiB 100%
 
 # ---------------------------------------------------------------------------
 # 3. Map as loopback device, LUKS-encrypt the root, and format each partition.
