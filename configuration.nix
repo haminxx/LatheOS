@@ -88,6 +88,13 @@
 
   services.openssh.enable = false;            # developer-facing box; no remote
   services.dbus.enable = true;
+
+  # logrotate ships enabled-by-default and validates its config at build time.
+  # Inside the Nix build sandbox /var/log lacks real-system permissions, so the
+  # check spuriously fails on the default btmp/wtmp rules ("insecure
+  # permissions"). Skip the *build-time* check only; logrotate still runs and
+  # rotates logs normally at runtime. This is the upstream-recommended fix.
+  services.logrotate.checkConfig = false;
   services.seatd.enable = true;               # Wayland session without logind
   xdg.portal = {
     enable = true;
