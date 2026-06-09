@@ -27,12 +27,19 @@
 { config, pkgs, lib, ... }:
 
 let
-  # Single source of truth for the two-model defaults. Override in
+  # Single source of truth for the model defaults. Override in
   # /persist/secrets/llm.env if the user wants a different pairing.
   voiceModel = "llama3.2:3b";          # Meta — tiny, fast, conversational.
-  heavyModelBig = "codestral:22b";     # Mistral (France) — strong at code;
-                                        # needs ~16 GB free RAM.
-  heavyModelSmall = "llama3.1:8b";     # Meta — fits in ~6-8 GB.
+                                        # Doubles as the Hermes router's
+                                        # classifier (LATHEOS_CLASSIFIER_MODEL).
+  heavyModelBig = "gemma3:12b";        # Google — Engine A's headline local
+                                        # model (the architecture's "Gemma 12B");
+                                        # picked only where there's RAM headroom.
+  heavyModelSmall = "llama3.1:8b";     # Meta — fits in ~6-8 GB (16 GB baseline).
+
+  # Embeddings for Hermes "General" memory (vector RAG). Small + CPU-friendly,
+  # served by the same Ollama via /api/embed. See daemon/cam_daemon/memory.py.
+  embedModel = "nomic-embed-text";
 
   # Default Piper voice paths — primary (en) + alt (ko). Both live on the
   # exFAT partition so the user can swap them from Windows/macOS/Linux
@@ -70,6 +77,7 @@ in
     "d /assets/models/piper        0755 dev users - -"
     "d /assets/models/openwakeword 0755 dev users - -"
     "d /persist/cache/llm          0755 dev users - -"
+    "d /persist/state              0755 dev users - -"
   ];
 
   ##############################################################################
@@ -127,6 +135,43 @@ in
     # Where openWakeWord finds its ONNX weights. Populated by
     # scripts/prefetch-models.sh at image-build time.
     LATHEOS_OWW_MODELS_DIR=/assets/models/openwakeword
+
+    ##########################################################################
+    # Hermes — hybrid cognitive orchestrator (daemon/cam_daemon/hermes.py)
+    ##########################################################################
+    # The router decides local (Engine A, above) vs cloud (Engine B, below).
+    # It classifies with the small voice model — never the heavy one.
+    LATHEOS_ROUTER_ENABLE=1
+    LATHEOS_CLASSIFIER_MODEL=${voiceModel}
+
+    # Heavy *offline* reasoning via the legacy 5-role fan-out (agents.py).
+    # Off by default; Hermes does a single heavy call instead. Set to 1 to
+    # trade latency for more thorough local answers.
+    LATHEOS_DEEP_LOCAL=0
+
+    ##########################################################################
+    # 3-tier memory (daemon/cam_daemon/memory.py)
+    ##########################################################################
+    LATHEOS_MEMORY_ENABLE=1
+    LATHEOS_EMBED_MODEL=${embedModel}
+    LATHEOS_CORE_MEMORY=/persist/state/core.yml
+    LATHEOS_GENERAL_DB=/persist/cache/llm/general.db
+    LATHEOS_TREND_EVENTS=/run/cam-daemon/events.jsonl
+    LATHEOS_SESSION_FILE=/persist/state/session.json
+
+    ##########################################################################
+    # Cloud frontier model (Engine B). PRIVACY: OFF until you opt in, and
+    # even then nothing is sent without a per-task confirm (LATHEOS_CLOUD_
+    # CONFIRM=1). Store the key with `vault set <NAME>` then set ENABLE=1 in
+    # /persist/secrets/llm.env (the first-run wizard does this for you).
+    # OpenAI-compatible: works with OpenRouter or NVIDIA NIM — set URL/MODEL
+    # to your provider's exact values.
+    ##########################################################################
+    LATHEOS_CLOUD_ENABLE=0
+    LATHEOS_CLOUD_CONFIRM=1
+    LATHEOS_CLOUD_URL=https://openrouter.ai/api/v1
+    LATHEOS_CLOUD_MODEL=nvidia/nemotron-3-ultra
+    LATHEOS_CLOUD_API_KEY_NAME=OPENROUTER_API_KEY
   '';
 
   ##############################################################################
@@ -144,11 +189,11 @@ in
     script = ''
       set -eu
       TOTAL_MB=$(${pkgs.gawk}/bin/awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
-      # Default target is a mid-range 16 GB laptop: that lands on the 8B heavy
-      # model (≈6 GB), leaving headroom for the 3B voice model + the host.
-      # Codestral 22B q4 wants ~16 GB on its own, so we only pick it when the
-      # machine has ≥20 GB total — i.e. a workstation, not the 16 GB baseline.
-      if [ "$TOTAL_MB" -ge 20000 ]; then
+      # Gemma 12B (q4 ≈8 GB) is Engine A's headline model — we pick it once the
+      # host has ≥16 GB total, leaving room for the 3B voice model + the OS.
+      # Smaller / low-RAM machines fall back to the 8B model (≈6 GB) so the
+      # same USB still boots and reasons on a thin laptop.
+      if [ "$TOTAL_MB" -ge 16000 ]; then
         PICK=${heavyModelBig}
       else
         PICK=${heavyModelSmall}
@@ -211,7 +256,122 @@ in
       echo "Pulling heavy model: $HEAVY"
       ${pkgs.ollama}/bin/ollama pull "$HEAVY" || echo "heavy model pull failed (offline?)"
 
+      # Embeddings for Hermes "General" memory (vector RAG). Small (~270 MB);
+      # non-fatal if offline — memory just stays empty until it can be pulled.
+      echo "Pulling embeddings model: ${embedModel}"
+      ${pkgs.ollama}/bin/ollama pull "${embedModel}" || echo "embeddings pull failed (offline?)"
+
       date -u +%FT%TZ > "$MARKER" || true
+    '';
+  };
+
+  ##############################################################################
+  # 5b. Seed Hermes "Core" memory — immutable identity + OS directives.
+  ##############################################################################
+  # Core memory is a plain-text file injected verbatim into every Hermes system
+  # prompt (local AND cloud). We seed a sensible template once; the user edits
+  # it to teach the assistant who they are and the rules it must always follow.
+  # It lives on /persist (ext4) so other host OSes can't read it off the stick.
+  systemd.services.latheos-core-memory-init = {
+    description = "LatheOS — seed Hermes Core memory (core.yml) on first boot";
+    wantedBy = [ "multi-user.target" ];
+    before   = [ "cam-daemon.service" ];
+    serviceConfig.Type = "oneshot";
+    serviceConfig.RemainAfterExit = true;
+    path = [ pkgs.coreutils ];
+    script = ''
+      set -eu
+      CORE=/persist/state/core.yml
+      mkdir -p /persist/state
+      if [ -e "$CORE" ]; then
+        exit 0
+      fi
+      cat > "$CORE" <<'YAML'
+      # LatheOS Core Memory — Hermes injects this verbatim into every prompt.
+      # This is the assistant's most authoritative context. Edit it to taste;
+      # keep it short and factual. Lines starting with '#' are comments.
+
+      identity:
+        # Who the assistant is talking to. Fill these in.
+        user_name: ""
+        pronouns: ""
+        timezone: ""
+        languages: ["en"]
+
+      preferences:
+        # How you like answers. The assistant should honor these.
+        tone: "calm, concise, no fluff"
+        verbosity: "short by default; expand only when asked"
+        code_style: "minimal, well-structured, NixOS/Linux-aware"
+
+      directives:
+        # Hard rules the assistant must always follow.
+        - "Privacy-first: prefer the local engine; only use the cloud when the user confirms."
+        - "Never run destructive commands without an explicit 'yes, do it'."
+        - "Never fabricate hardware specs or system state."
+        - "Keep secrets on-device; never echo API keys or vault contents."
+      YAML
+      chown dev:users "$CORE" || true
+      chmod 0644 "$CORE" || true
+      echo "seeded Core memory at $CORE"
+    '';
+  };
+
+  ##############################################################################
+  # 5c. Expose the cloud API key to the daemon (opt-in, confirm-gated upstream).
+  ##############################################################################
+  # The daemon runs as `dev` and CANNOT read the age private key (root-only),
+  # so it can't unseal the vault itself. This root oneshot decrypts ONLY the
+  # configured cloud key and drops it in /run (tmpfs, wiped each boot), group
+  # `audio` so the daemon can read it. Runs only when cloud is enabled AND the
+  # key exists — otherwise nothing is decrypted or written.
+  systemd.services.latheos-cloud-key = {
+    description = "LatheOS — expose the cloud API key from the vault to the daemon (opt-in)";
+    after    = [ "assets.mount" "cam-vault-init.service" ];
+    wants    = [ "cam-vault-init.service" ];
+    wantedBy = [ "multi-user.target" ];
+    before   = [ "cam-daemon.service" ];
+    serviceConfig.Type = "oneshot";
+    serviceConfig.RemainAfterExit = true;
+    path = [ pkgs.age pkgs.jq pkgs.gnugrep pkgs.coreutils ];
+    script = ''
+      set -eu
+      OUT=/run/latheos/cloud.env
+      mkdir -p /run/latheos
+      rm -f "$OUT"
+
+      # Read effective config from the env-file chain (later files win).
+      ENABLE=0
+      KEYNAME=OPENROUTER_API_KEY
+      for f in /etc/latheos/llm.env /persist/secrets/llm.env; do
+        [ -r "$f" ] || continue
+        v=$(grep -E '^LATHEOS_CLOUD_ENABLE=' "$f" | tail -1 | cut -d= -f2- || true)
+        [ -n "$v" ] && ENABLE="$v"
+        v=$(grep -E '^LATHEOS_CLOUD_API_KEY_NAME=' "$f" | tail -1 | cut -d= -f2- || true)
+        [ -n "$v" ] && KEYNAME="$v"
+      done
+
+      if [ "$ENABLE" != "1" ]; then
+        echo "cloud disabled — not exposing any key"; exit 0
+      fi
+
+      KEY=/persist/secrets/vault.key
+      BLOB=/assets/vault/secrets.age
+      if [ ! -r "$KEY" ] || [ ! -r "$BLOB" ]; then
+        echo "vault not initialised — skipping"; exit 0
+      fi
+
+      VAL=$(age --decrypt -i "$KEY" "$BLOB" 2>/dev/null \
+        | jq -r --arg k "$KEYNAME" '.[$k].value // empty' || true)
+      if [ -z "$VAL" ]; then
+        echo "no '$KEYNAME' in vault — skipping"; exit 0
+      fi
+
+      umask 027
+      printf 'LATHEOS_CLOUD_API_KEY=%s\n' "$VAL" > "$OUT"
+      chgrp audio "$OUT" 2>/dev/null || true
+      chmod 0640 "$OUT"
+      echo "cloud key '$KEYNAME' exposed to the daemon"
     '';
   };
 

@@ -9,7 +9,8 @@
 #
 # What we download:
 #   * Ollama voice model (llama3.2:3b)          ~2 GB q4
-#   * Ollama heavy models (llama3.1:8b, maybe codestral:22b) ~5 / ~13 GB
+#   * Ollama heavy models (llama3.1:8b, maybe gemma3:12b)    ~5 / ~8 GB
+#   * Ollama embeddings (nomic-embed-text) for Hermes memory ~270 MB
 #   * Piper voices (en_US-amy-medium, ko_KR-kss-medium)      ~60 MB each
 #   * Whisper.cpp ggml-base.en                               ~150 MB
 #   * openWakeWord pretrained bundle (hey_jarvis + alexa)     ~3 MB
@@ -48,7 +49,9 @@ WITH_MISO="${WITH_MISO:-0}"              # 1 = also fetch MisoTTS premium voice 
 
 VOICE_MODEL="llama3.2:3b"
 HEAVY_SMALL="llama3.1:8b"
-HEAVY_BIG="codestral:22b"
+HEAVY_BIG="gemma3:12b"                   # Engine A headline model (the architecture's "Gemma 12B")
+EMBED_MODEL="nomic-embed-text"          # Hermes "General" memory embeddings
+SKIP_EMBED="${SKIP_EMBED:-0}"
 
 # NVIDIA LocateAnything-3B — visual grounding VLM. OPT-IN, GPU-only,
 # NON-COMMERCIAL license (https://huggingface.co/nvidia/LocateAnything-3B).
@@ -108,6 +111,13 @@ if [[ "$SKIP_OLLAMA" != 1 ]]; then
   else
     log "pulling heavy (small): ${HEAVY_SMALL}"
     ollama pull "${HEAVY_SMALL}"
+  fi
+
+  # Embeddings for Hermes "General" memory (vector RAG). Tiny; bake it in so
+  # memory works offline on first boot. Skip with SKIP_EMBED=1.
+  if [[ "$SKIP_EMBED" != 1 ]]; then
+    log "pulling embeddings: ${EMBED_MODEL}"
+    ollama pull "${EMBED_MODEL}"
   fi
 
   kill "$OLLAMA_PID" 2>/dev/null || true

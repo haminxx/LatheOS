@@ -12,6 +12,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, RichLog
 
+from .context import memory_brief
 from .hardware import HardwareInventory
 from .llm import LocalLLM
 from .voicebus import VoiceBusReader
@@ -71,7 +72,9 @@ class ChatPane(Vertical):
             if etype == "user":
                 log.write(f"[dim](voice)[/] [b]you>[/b] {text}")
             elif etype == "cam":
-                log.write(f"[dim](voice)[/] [b]CAM>[/b] {text}")
+                # Surface which engine answered so cloud turns are never silent.
+                tag = "CAM·cloud" if event.get("engine") == "cloud" else "CAM"
+                log.write(f"[dim](voice)[/] [b]{tag}>[/b] {text}")
 
     def _hardware_brief(self) -> str:
         lines = ["HARDWARE:"]
@@ -96,7 +99,13 @@ class ChatPane(Vertical):
         if not await self._llm.health():
             log.write("[dim]CAM: local LLM is not ready. Check `systemctl status ollama`.[/]")
             return
+        # Ground the reply in the same Core+Trend memory Hermes uses. (Vector
+        # RAG + cloud routing live in the daemon; run `lathe-cloud "..."` for
+        # the full Hermes brain from the terminal.)
         system = _SYSTEM_PROMPT + "\n" + self._hardware_brief()
+        memory = memory_brief()
+        if memory:
+            system = f"{system}\n\n{memory}"
         log.write("[b]CAM>[/b]")
         buffer: list[str] = []
         try:

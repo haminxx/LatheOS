@@ -1,14 +1,17 @@
 """Daemon entrypoint. Wired by systemd via `ExecStart=cam-daemon`.
 
-LatheOS is privacy-first and fully local. The whole assistant loop runs on
-the USB — no microphone audio, transcript, or prompt ever leaves the
-machine. There is no cloud, no account, no hardware token.
+LatheOS is privacy-first and local-default. The whole assistant loop runs on
+the USB; mic audio and transcripts never leave the machine. A prompt only
+leaves the device when Hermes routes a task to the optional cloud engine AND
+the user confirms that specific task by voice (off unless opted in).
 
 Lifecycle:
     boot -> idle-listen for a wake event (wake word / clap / control socket)
          -> capture one utterance from the mic
          -> whisper.cpp speech-to-text   (cam_daemon.stt)
-         -> local Ollama multi-agent     (cam_daemon.agents.run_agents)
+         -> Hermes orchestrator          (cam_daemon.hermes): assembles 3-tier
+            memory, routes local Ollama (Engine A) vs confirm-gated cloud
+            (Engine B), and returns one answer
          -> Piper / MisoTTS speech-out    (cam_daemon.tts)
          -> optionally run an allowlisted command (cam_daemon.executor)
          -> publish the turn to the lathe shell (cam_daemon.bus)
@@ -31,12 +34,12 @@ import signal
 
 import structlog
 
-from cam_daemon.agents import AgentConfig, run_agents
 from cam_daemon.audio_io import play_pcm
 from cam_daemon.bus import EventBus
 from cam_daemon.camera import Camera
 from cam_daemon.control_socket import ControlSocket
 from cam_daemon.executor import dispatch
+from cam_daemon.hermes import Hermes
 from cam_daemon.stt import SpeechToText, record_utterance
 from cam_daemon.tts import TextToSpeech
 from cam_daemon.vision import VisionRouter
@@ -118,8 +121,8 @@ def _voice_exec_enabled() -> bool:
     return os.environ.get("LATHEOS_VOICE_EXEC", "0").strip() == "1"
 
 
-async def _maybe_execute(results) -> None:
-    """Scan worker outputs for a single JSON command and dispatch it.
+async def _maybe_execute(outputs) -> None:
+    """Scan model outputs for a single JSON command and dispatch it.
 
     Conservative on purpose: only fires when LATHEOS_VOICE_EXEC=1, and the
     executor itself still enforces the bash allowlist. Voice should never be
@@ -127,8 +130,8 @@ async def _maybe_execute(results) -> None:
     """
     if not _voice_exec_enabled():
         return
-    for r in results:
-        match = _CMD_RE.search(r.output or "")
+    for text in outputs:
+        match = _CMD_RE.search(text or "")
         if not match:
             continue
         try:
@@ -229,18 +232,53 @@ async def _handle_vision(
     await _speak(tts, reply)
 
 
+_CLOUD_YES = ("yes", "yeah", "yep", "confirm", "go ahead", "do it", "sure", "cloud", "please do")
+
+
+def _make_cloud_confirm(
+    *,
+    stt: SpeechToText,
+    tts: TextToSpeech,
+    audio_q: "asyncio.Queue[bytes]",
+    bus: EventBus,
+):
+    """Build the voice confirm gate for cloud routing.
+
+    Hermes calls this before any prompt leaves the device. We speak the ask,
+    listen for one short reply, and only approve on an explicit yes. Silence,
+    a no, or a transcription miss all fall back to the local engine — the
+    privacy-safe default.
+    """
+    async def _confirm(reason: str) -> bool:
+        bus.publish({"type": "cloud_confirm", "reason": reason})
+        await _speak(
+            tts,
+            "This looks like deep work. Say yes to send it to the cloud model, "
+            "or stay quiet to keep it on device.",
+        )
+        pcm = await record_utterance(audio_q, sample_rate=stt.sample_rate)
+        if not pcm:
+            return False
+        answer = (await stt.transcribe(pcm) or "").strip().lower()
+        approved = any(word in answer for word in _CLOUD_YES)
+        log.info("cloud.confirm", approved=approved, heard=answer[:60])
+        return approved
+
+    return _confirm
+
+
 async def handle_activation(
     activation,
     *,
     stt: SpeechToText,
     tts: TextToSpeech,
-    agent_cfg: AgentConfig,
+    hermes: Hermes,
     audio_q: "asyncio.Queue[bytes]",
     bus: EventBus,
     camera: Camera,
     vision: VisionRouter,
 ) -> None:
-    """One full local turn: listen -> transcribe -> (see | think) -> speak."""
+    """One full turn: listen -> transcribe -> (see | think via Hermes) -> speak."""
     pcm = await record_utterance(audio_q, sample_rate=stt.sample_rate)
     if not pcm:
         log.info("session.no_speech")
@@ -272,22 +310,23 @@ async def handle_activation(
         )
         return
 
+    confirm = _make_cloud_confirm(stt=stt, tts=tts, audio_q=audio_q, bus=bus)
     try:
-        results = await run_agents(transcript, agent_cfg)
+        reply = await hermes.respond(transcript, confirm=confirm)
     except Exception as exc:                # noqa: BLE001 — never fatal
-        log.exception("agents.failed", error=str(exc))
+        log.exception("hermes.failed", error=str(exc))
         await _speak(tts, "Something went wrong thinking that through.")
         return
 
-    spoken = results[-1].output.strip() if results else ""
-    detail = [
-        {"role": r.role, "task": r.task, "output": r.output, "error": r.error}
-        for r in results[:-1]
-    ]
-    bus.publish({"type": "cam", "text": spoken, "detail": detail})
+    spoken = reply.text.strip()
+    log.info("hermes.reply", engine=reply.engine, intent=reply.intent, reason=reply.reason)
+    bus.publish(
+        {"type": "cam", "text": spoken, "engine": reply.engine, "detail": reply.detail}
+    )
 
     with contextlib.suppress(Exception):
-        await _maybe_execute(results[:-1])
+        outputs = [spoken] + [d.get("output", "") for d in reply.detail if isinstance(d, dict)]
+        await _maybe_execute(outputs)
 
     await _speak(tts, spoken or "Done.")
 
@@ -300,7 +339,7 @@ async def main_loop() -> None:
     )
     stt = SpeechToText()
     tts = TextToSpeech()
-    agent_cfg = AgentConfig()
+    hermes = Hermes()
     bus = EventBus()
     camera = Camera()
     vision = VisionRouter()
@@ -329,7 +368,7 @@ async def main_loop() -> None:
                     activation,
                     stt=stt,
                     tts=tts,
-                    agent_cfg=agent_cfg,
+                    hermes=hermes,
                     audio_q=audio_q,
                     bus=bus,
                     camera=camera,

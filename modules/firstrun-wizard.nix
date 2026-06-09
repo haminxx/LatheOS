@@ -104,19 +104,35 @@ let
         nmtui || printf 'Network tool exited — you can connect later from the menu bar.\n' >&2
       fi
 
-      # --- 5. Optional cloud key --------------------------------------------
-      say "5) Cloud coding (optional)"
-      printf 'LatheOS is local-first. If you want the optional "lathe-ai" cloud\n'
-      printf 'boost, you can store an API key now (it goes into the encrypted vault).\n'
-      ask "Store a cloud API key now? [y/N]"
+      # --- 5. Optional cloud frontier model (Hermes Engine B) ---------------
+      say "5) Cloud frontier model (optional)"
+      printf 'LatheOS is local-first. Hermes can ALSO send a hard task to a cloud\n'
+      printf 'frontier model (Engine B) — but only when you confirm that task. The\n'
+      printf 'API key goes into the encrypted, LatheOS-only vault.\n'
+      ask "Enable the cloud frontier model now? [y/N]"
       read -r ans
       if { [ "''${ans:-n}" = "y" ] || [ "''${ans:-n}" = "Y" ]; } && command -v vault >/dev/null 2>&1; then
-        ask "Which key name? (e.g. CURSOR_API_KEY / ANTHROPIC_API_KEY):"
+        printf 'Default provider is OpenRouter (key name OPENROUTER_API_KEY). Press\n'
+        printf 'Enter to accept, or type another vault key name.\n'
+        ask "Key name [OPENROUTER_API_KEY]:"
         read -r keyname
-        if [ -n "''${keyname:-}" ]; then
-          vault set "$keyname" && vault mark-auto "$keyname" true
-          printf 'Stored %s in the vault.\n' "$keyname"
+        keyname="''${keyname:-OPENROUTER_API_KEY}"
+        if vault set "$keyname"; then
+          vault mark-auto "$keyname" true
+          sudo mkdir -p /persist/secrets
+          # Turn Engine B on and point Hermes at the right vault key. The
+          # latheos-cloud-key service decrypts it into /run on next boot.
+          {
+            printf 'LATHEOS_CLOUD_ENABLE=1\n'
+            printf 'LATHEOS_CLOUD_API_KEY_NAME=%s\n' "$keyname"
+          } | sudo tee -a "$USR_ENV" >/dev/null
+          printf 'Cloud enabled. Stored %s in the vault.\n' "$keyname"
+          printf 'Routing stays confirm-gated — nothing is sent without your OK.\n'
+          printf 'Tip: tweak LATHEOS_CLOUD_URL / LATHEOS_CLOUD_MODEL in %s.\n' "$USR_ENV"
+          printf 'Test it later with: lathe-cloud test\n'
         fi
+      else
+        printf 'Keeping it fully local. You can enable the cloud later with lathe-setup.\n'
       fi
 
       # --- done --------------------------------------------------------------

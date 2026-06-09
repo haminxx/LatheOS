@@ -32,6 +32,7 @@ picovoice = ["pvporcupine>=3.0.2"]
 [project.scripts]
 cam-daemon = "cam_daemon.__main__:main"
 camctl = "camctl.__main__:main"
+lathe-cloud = "cam_daemon.cloud_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["cam_daemon*", "camctl*"]

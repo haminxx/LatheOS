@@ -75,11 +75,13 @@ in {
   # Runtime configuration — overridden at flash time via an env-file on the
   # persistent partition. Never commit this file to the store.
   #
-  # LatheOS is PRIVACY-FIRST / FULLY LOCAL: the daemon transcribes with
+  # LatheOS is PRIVACY-FIRST / LOCAL-DEFAULT: the daemon transcribes with
   # whisper.cpp, reasons with the on-disk Ollama instance (modules/
-  # local-llm.nix), and speaks with Piper/MisoTTS. There is no cloud path and
-  # no hardware token. The model names + endpoint come from /etc/latheos/
-  # llm.env; this file only carries the daemon's own knobs.
+  # local-llm.nix), and speaks with Piper/MisoTTS. Hermes can ALSO route a task
+  # to a cloud frontier model (Engine B), but only when the user opts in
+  # (LATHEOS_CLOUD_ENABLE=1) AND confirms that specific task by voice — nothing
+  # leaves the device otherwise. The model names + endpoints come from
+  # /etc/latheos/llm.env; this file only carries the daemon's own knobs.
   environment.etc."latheos/cam.env".text = ''
     CAM_SAMPLE_RATE=16000
 
@@ -138,6 +140,7 @@ in {
         "-/etc/latheos/pilot.env"         # Screen Pilot enable/flags + endpoints; see screen-pilot.nix
         "-/run/latheos/heavy-model.env"   # RAM-based heavy-model autoselect (local-llm.nix)
         "-/run/latheos/tts-backend.env"   # GPU-based TTS autoselect (tts.nix)
+        "-/run/latheos/cloud.env"         # cloud API key decrypted from the vault (local-llm.nix)
         "-/persist/secrets/cam.env"       # optional per-drive overrides (e.g. Picovoice key)
         "-/persist/secrets/llm.env"       # optional per-drive model overrides
         "-/persist/secrets/camera.env"    # optional per-drive camera override
@@ -160,7 +163,10 @@ in {
       MemoryDenyWriteExecute = false;   # sounddevice/portaudio JIT paths
       SystemCallArchitectures = "native";
       SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
-      ReadWritePaths = [ "/run/user" ];
+      # Hermes memory needs to persist beyond /run: the General vector DB
+      # (/persist/cache/llm) and Core/Trend reads (/persist/state). ProtectHome
+      # is read-only, so these explicit RW paths are how the daemon writes them.
+      ReadWritePaths = [ "/run/user" "/persist/cache/llm" "/persist/state" ];
     };
   };
 }
